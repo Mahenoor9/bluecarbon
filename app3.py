@@ -1,129 +1,264 @@
 import streamlit as st
 import sqlite3
-import pandas as pd
 from datetime import datetime
+import pandas as pd
 
-# ------------------------------
+# -------------------
 # Database Setup
-# ------------------------------
+# -------------------
 conn = sqlite3.connect("registry.db", check_same_thread=False)
 c = conn.cursor()
+# Keep SQLite safety features enabled
+c.execute("PRAGMA foreign_keys = ON")
 
-# Create table if not exists
+# Create table if not exists (preferred schema)
 c.execute('''
 CREATE TABLE IF NOT EXISTS projects (
-    project_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT,
     type TEXT,
     region TEXT,
-    status TEXT,
     area_ha REAL,
     carbon_tonnes REAL,
     credits REAL,
+    status TEXT,
     created_at TEXT
 )
 ''')
 conn.commit()
 
-# ------------------------------
-# Helper Functions
-# ------------------------------
+# Ensure schema has required columns and backfill from legacy names if needed
+
+def ensure_projects_schema():
+    c.execute("PRAGMA table_info(projects)")
+    cols = {row[1] for row in c.fetchall()}
+
+    # Add missing columns (if projects table was created by other app variant)
+    if "area_ha" not in cols:
+        c.execute("ALTER TABLE projects ADD COLUMN area_ha REAL")
+        # If legacy 'area' exists, try to copy values
+        if "area" in cols:
+            try:
+                c.execute("UPDATE projects SET area_ha = area WHERE area_ha IS NULL")
+            except Exception:
+                pass
+        c.execute("UPDATE projects SET area_ha = COALESCE(area_ha, 0.0)")
+
+    if "carbon_tonnes" not in cols:
+        c.execute("ALTER TABLE projects ADD COLUMN carbon_tonnes REAL")
+        # If legacy 'carbon' exists, try to copy values
+        if "carbon" in cols:
+            try:
+                c.execute("UPDATE projects SET carbon_tonnes = carbon WHERE carbon_tonnes IS NULL")
+            except Exception:
+                pass
+        c.execute("UPDATE projects SET carbon_tonnes = COALESCE(carbon_tonnes, 0.0)")
+
+    if "credits" not in cols:
+        c.execute("ALTER TABLE projects ADD COLUMN credits REAL")
+        c.execute("UPDATE projects SET credits = COALESCE(credits, 0.0)")
+
+    if "status" not in cols:
+        c.execute("ALTER TABLE projects ADD COLUMN status TEXT")
+        c.execute("UPDATE projects SET status = COALESCE(status, 'Issued')")
+
+    if "created_at" not in cols:
+        c.execute("ALTER TABLE projects ADD COLUMN created_at TEXT")
+
+    conn.commit()
+
+
+def detect_schema():
+    c.execute("PRAGMA table_info(projects)")
+    cols = {row[1] for row in c.fetchall()}
+    id_col = None
+    # Prefer 'id'; fallback to legacy 'project_id'
+    if "id" in cols:
+        id_col = "id"
+    elif "project_id" in cols:
+        id_col = "project_id"
+
+    area_col = "area_ha" if "area_ha" in cols else ("area" if "area" in cols else None)
+    carbon_col = "carbon_tonnes" if "carbon_tonnes" in cols else ("carbon" if "carbon" in cols else None)
+
+    return {
+        "id_col": id_col,
+        "area_col": area_col,
+        "carbon_col": carbon_col,
+    }
+
+
+ensure_projects_schema()
+SCHEMA = detect_schema()
+
+
+# -------------------
+# Helpers
+# -------------------
+
+def do_rerun():
+    # Compatible rerun helper
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+    else:
+        # Fallback: tweak query params to force a rerun
+        try:
+            st.experimental_set_query_params(_=datetime.now().timestamp())
+        except Exception:
+            pass
+
+
 def calculate_credits(area, carbon):
-    # Simple formula for credits; can modify coefficient
-    return area * carbon * 0.1
+    # Example formula (adjust as needed)
+    return round(area * 0.5 + carbon * 0.2, 2)
+
 
 def add_project(name, type_, region, area, carbon):
     credits = calculate_credits(area, carbon)
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute('''
-        INSERT INTO projects (name, type, region, status, area_ha, carbon_tonnes, credits, created_at)
+        INSERT INTO projects (name, type, region, area_ha, carbon_tonnes, credits, status, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (name, type_, region, 'Issued', area, carbon, credits, created_at))
+    ''', (name, type_, region, area, carbon, credits, "Issued", created_at))
     conn.commit()
-    return credits
+
+
+def delete_project(proj_id):
+    if not SCHEMA["id_col"]:
+        raise RuntimeError("Projects table has no identifiable primary key column.")
+    try:
+        conn.execute("BEGIN")
+        c.execute(f'DELETE FROM projects WHERE {SCHEMA["id_col"]} = ?', (int(proj_id),))
+        if c.rowcount == 1:
+            conn.commit()
+        else:
+            conn.rollback()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def update_status(proj_id, status):
+    if not SCHEMA["id_col"]:
+        raise RuntimeError("Projects table has no identifiable primary key column.")
+    c.execute(f'UPDATE projects SET status=? WHERE {SCHEMA["id_col"]} = ?', (status, int(proj_id)))
+    conn.commit()
+
 
 def get_all_projects():
-    c.execute("SELECT * FROM projects")
-    data = c.fetchall()
-    df = pd.DataFrame(data, columns=['ID', 'Name', 'Type', 'Region', 'Status', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Created_at'])
-    return df
+    if not SCHEMA["id_col"]:
+        # Return empty DataFrame if schema is too malformed
+        return pd.DataFrame(columns=['ID', 'Name', 'Type', 'Region', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Status', 'Created_at'])
 
-def update_status(project_id, new_status):
-    c.execute("UPDATE projects SET status=? WHERE project_id=?", (new_status, project_id))
-    conn.commit()
+    id_col = SCHEMA["id_col"]
+    area_col = SCHEMA["area_col"] or "area_ha"
+    carbon_col = SCHEMA["carbon_col"] or "carbon_tonnes"
 
-def delete_project(project_id):
-    c.execute("DELETE FROM projects WHERE project_id=?", (project_id,))
-    conn.commit()
+    # Build a safe query based on available columns
+    select_cols = [
+        f"{id_col} AS ID",
+        "name AS Name",
+        "type AS Type",
+        "region AS Region",
+        f"{area_col} AS Area_ha",
+        f"{carbon_col} AS Carbon_tonnes",
+        "credits AS Credits",
+        "status AS Status",
+        "created_at AS Created_at",
+    ]
+    query = "SELECT " + ", ".join(select_cols) + " FROM projects"
 
-# ------------------------------
+    try:
+        c.execute(query)
+        data = c.fetchall()
+        if data:
+            df = pd.DataFrame(data, columns=['ID', 'Name', 'Type', 'Region', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Status', 'Created_at'])
+            return df
+        else:
+            return pd.DataFrame(columns=['ID', 'Name', 'Type', 'Region', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Status', 'Created_at'])
+    except Exception:
+        # If for any reason the dynamic query fails, return empty frame
+        return pd.DataFrame(columns=['ID', 'Name', 'Type', 'Region', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Status', 'Created_at'])
+
+
+# -------------------
 # Admin Dashboard
-# ------------------------------
+# -------------------
+
 def admin_dashboard():
-    st.title("Admin Dashboard - Carbon Registry")
-
+    st.title("Admin Dashboard")
     st.subheader("Add New Project")
-    with st.form("add_project_form"):
-        name = st.text_input("Project Name")
-        type_ = st.text_input("Project Type")
-        region = st.text_input("Region")
-        area = st.number_input("Area (ha)", min_value=0.0)
-        carbon = st.number_input("Carbon Stock (tonnes)", min_value=0.0)
-        submitted = st.form_submit_button("Add Project")
-        if submitted:
-            if name and type_ and region:
-                credits = add_project(name, type_, region, area, carbon)
-                st.success(f"Project added successfully! Calculated credits: {credits}")
-            else:
-                st.error("Please fill all the fields!")
 
-    st.subheader("Project Dashboard")
+    name = st.text_input("Project Name")
+    type_ = st.text_input("Project Type")
+    region = st.text_input("Region")
+    area = st.number_input("Area (ha)", min_value=0.0)
+    carbon = st.number_input("Carbon Stored (tonnes)", min_value=0.0)
+
+    if st.button("Add Project"):
+        if name and type_ and region:
+            add_project(name, type_, region, area, carbon)
+            st.success("Project added successfully!")
+            do_rerun()
+        else:
+            st.error("Fill all required fields!")
+
+    st.subheader("Projects Overview")
     df = get_all_projects()
     if not df.empty:
-        for index, row in df.iterrows():
-            st.markdown(f"**{row['Name']}** | Type: {row['Type']} | Region: {row['Region']} | Status: {row['Status']} | Area: {row['Area_ha']} ha | Carbon: {row['Carbon_tonnes']} tonnes | Credits: {row['Credits']}")
-            cols = st.columns(3)
-            if cols[0].button("Issue", key=f"issue{row['ID']}"):
-                update_status(row['ID'], "Issued")
-                st.experimental_rerun()
-            if cols[1].button("Retire", key=f"retire{row['ID']}"):
-                update_status(row['ID'], "Retired")
-                st.experimental_rerun()
-            if cols[2].button("Delete", key=f"delete{row['ID']}"):
-                delete_project(row['ID'])
-                st.experimental_rerun()
-    else:
-        st.info("No projects available.")
+        st.dataframe(df)
 
-# ------------------------------
+        st.subheader("Manage Projects")
+        for _, row in df.iterrows():
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button(f"Delete {row['ID']}", key=f"del_{row['ID']}"):
+                    delete_project(int(row['ID']))
+                    do_rerun()
+            with col2:
+                if st.button(f"Retire {row['ID']}", key=f"ret_{row['ID']}"):
+                    update_status(int(row['ID']), "Retired")
+                    do_rerun()
+            with col3:
+                if st.button(f"Issue {row['ID']}", key=f"iss_{row['ID']}"):
+                    update_status(int(row['ID']), "Issued")
+                    do_rerun()
+    else:
+        st.info("No projects yet!")
+
+
+# -------------------
 # Public Dashboard
-# ------------------------------
+# -------------------
+
 def public_dashboard():
-    st.title("Public Dashboard - Carbon Registry")
+    st.title("Public Registry")
     df = get_all_projects()
     if not df.empty:
         st.dataframe(df)
     else:
-        st.info("No projects available for public view.")
+        st.info("No projects available.")
 
-# ------------------------------
-# Main Function
-# ------------------------------
+
+# -------------------
+# Main App
+# -------------------
+
 def main():
     st.sidebar.title("Carbon Registry")
     mode = st.sidebar.selectbox("Select Mode", ["Public", "Admin"])
-    
+
     if mode == "Admin":
         password = st.sidebar.text_input("Enter Admin Password", type="password")
-        if password == "admin123":  # Set your admin password here
+        if password == "admin123":  # set your admin password here
             admin_dashboard()
         elif password:
-            st.sidebar.error("Incorrect password!")
+            st.sidebar.error("Wrong password!")
     else:
         public_dashboard()
 
-# ------------------------------
-# Run App
-# ------------------------------
+
 if __name__ == "__main__":
     main()
