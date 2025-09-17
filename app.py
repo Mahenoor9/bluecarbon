@@ -1,45 +1,107 @@
 import streamlit as st
+import sqlite3
 import pandas as pd
-import hashlib
-import time
+from datetime import datetime
 
-st.title("🌱 Blue Carbon MRV + Registry Demo")
+# ------------------------------
+# Database setup
+# ------------------------------
+conn = sqlite3.connect("registry.db", check_same_thread=False)
+c = conn.cursor()
 
-# Step 1: Upload CSV
-uploaded_file = st.file_uploader("Upload your mangrove dataset (CSV)", type="csv")
+# Create tables if not exist
+c.execute('''CREATE TABLE IF NOT EXISTS projects
+             (project_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT,
+              type TEXT,
+              region TEXT,
+              status TEXT,
+              credits REAL,
+              created_at TEXT)''')
+conn.commit()
 
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    st.subheader("Raw Dataset")
-    st.write(df)
+# ------------------------------
+# Authentication (Admin Login)
+# ------------------------------
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "bluecarbon123"
 
-    # Step 2: MRV Calculation (dummy logic)
-    if "Carbon_Stock_tonnes" in df.columns and "Area_ha" in df.columns:
-        df["Carbon_Credits"] = df["Area_ha"] * df["Carbon_Stock_tonnes"]
-        st.subheader("MRV Results (Carbon Credits)")
-        st.write(df)
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
-        # Step 3: Save into Registry (simulate as dataframe)
-        registry = df[["Region", "Area_ha", "Carbon_Credits"]].copy()
-        registry["Verified"] = True
-        registry["Timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        st.subheader("Registry Table")
-        st.write(registry)
+# Login form
+if not st.session_state.logged_in:
+    st.title("🌍 BlueCarbon Registry")
+    mode = st.radio("Choose Mode:", ["Public Mode", "Admin Login"])
 
-        # Step 4: Mock Blockchain Transactions
-        blockchain = []
-        prev_hash = "0x0"
-        for _, row in registry.iterrows():
-            tx_data = f"{row.Region}-{row.Carbon_Credits}-{row.Timestamp}"
-            tx_hash = hashlib.sha256(tx_data.encode()).hexdigest()
-            blockchain.append({
-                "transaction": tx_data,
-                "hash": tx_hash,
-                "previous_hash": prev_hash
-            })
-            prev_hash = tx_hash
+    if mode == "Admin Login":
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+                st.session_state.logged_in = True
+                st.success("✅ Login successful! Welcome Admin.")
+            else:
+                st.error("❌ Invalid credentials")
 
-        st.subheader("Blockchain Log (Simulated)")
-        st.json(blockchain)
-    else:
-        st.warning("CSV must include columns: Region, Area_ha, Carbon_Stock_tonnes")
+# ------------------------------
+# Public Mode (View only)
+# ------------------------------
+if not st.session_state.logged_in:
+    st.subheader("📖 Public Registry View")
+    projects = pd.read_sql("SELECT * FROM projects", conn)
+    st.dataframe(projects)
+
+# ------------------------------
+# Admin Mode (Full Access)
+# ------------------------------
+if st.session_state.logged_in:
+    st.sidebar.title("🔑 Admin Dashboard")
+    st.sidebar.write(f"👤 Logged in as: {ADMIN_USERNAME}")
+    if st.sidebar.button("🚪 Logout"):
+        st.session_state.logged_in = False
+        st.rerun()
+
+    menu = st.sidebar.radio("Select Action:", ["View Projects", "Add Project", "Update Status", "Delete Project"])
+
+    # View all projects
+    if menu == "View Projects":
+        st.subheader("📋 All Registered Projects")
+        projects = pd.read_sql("SELECT * FROM projects", conn)
+        st.dataframe(projects)
+
+    # Add new project
+    elif menu == "Add Project":
+        st.subheader("➕ Add New Project")
+        name = st.text_input("Project Name")
+        type_ = st.selectbox("Project Type", ["Mangrove", "Industry", "Other"])
+        region = st.text_input("Region")
+        credits = st.number_input("Carbon Credits", min_value=0.0)
+        if st.button("Add Project"):
+            c.execute("INSERT INTO projects (name, type, region, status, credits, created_at) VALUES (?,?,?,?,?,?)",
+                      (name, type_, region, "Issued", credits, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            conn.commit()
+            st.success("✅ Project added successfully!")
+
+    # Update project status
+    elif menu == "Update Status":
+        st.subheader("✏️ Update Project Status")
+        projects = pd.read_sql("SELECT * FROM projects", conn)
+        st.dataframe(projects)
+        project_id = st.number_input("Enter Project ID to Update", min_value=1)
+        new_status = st.selectbox("New Status", ["Issued", "Updated", "Retired", "Revoked"])
+        if st.button("Update"):
+            c.execute("UPDATE projects SET status=? WHERE project_id=?", (new_status, project_id))
+            conn.commit()
+            st.success("✅ Project status updated!")
+
+    # Delete project
+    elif menu == "Delete Project":
+        st.subheader("🗑️ Delete Project")
+        projects = pd.read_sql("SELECT * FROM projects", conn)
+        st.dataframe(projects)
+        project_id = st.number_input("Enter Project ID to Delete", min_value=1)
+        if st.button("Delete"):
+            c.execute("DELETE FROM projects WHERE project_id=?", (project_id,))
+            conn.commit()
+            st.warning("⚠️ Project deleted successfully!")
