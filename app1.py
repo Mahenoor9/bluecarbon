@@ -1,7 +1,7 @@
 import streamlit as st
 import sqlite3
-import pandas as pd
 from datetime import datetime
+import pandas as pd
 
 # ------------------------------
 # Database setup
@@ -9,129 +9,104 @@ from datetime import datetime
 conn = sqlite3.connect("registry.db", check_same_thread=False)
 c = conn.cursor()
 
-# Create tables if not exist
-c.execute('''CREATE TABLE IF NOT EXISTS projects
-             (project_id INTEGER PRIMARY KEY AUTOINCREMENT,
-              name TEXT,
-              type TEXT,
-              region TEXT,
-              status TEXT,
-              area REAL,
-              carbon REAL,
-              credits REAL,
-              created_at TEXT)''')
-
-# Ensure schema has all required columns (handles older DBs)
-
-def ensure_project_table_schema():
-    c.execute("PRAGMA table_info(projects)")
-    existing_cols = {row[1] for row in c.fetchall()}
-    required = [
-        ("status", "TEXT", "issued"),
-        ("area", "REAL", 0.0),
-        ("carbon", "REAL", 0.0),
-        ("credits", "REAL", 0.0),
-        ("created_at", "TEXT", None),
-    ]
-    for col_name, col_type, default in required:
-        if col_name not in existing_cols:
-            c.execute(f"ALTER TABLE projects ADD COLUMN {col_name} {col_type}")
-            if default is not None:
-                c.execute(f"UPDATE projects SET {col_name} = ?", (default,))
-    conn.commit()
-
-ensure_project_table_schema()
+# Create projects table
+c.execute('''
+    CREATE TABLE IF NOT EXISTS projects (
+        project_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        type TEXT,
+        region TEXT,
+        status TEXT,
+        area_ha REAL,
+        carbon_tonnes REAL,
+        credits REAL,
+        created_at TEXT
+    )
+''')
+conn.commit()
 
 # ------------------------------
 # Helper functions
 # ------------------------------
+def calculate_credits(area, carbon):
+    """Simple formula: 1 credit = 1 hectare * 0.5 * carbon tonnes"""
+    return round(area * carbon * 0.5, 2)
 
-def calculate_credits(area_ha, carbon_tonnes):
-    # Example formula: 1 credit per 0.1 tonne CO2 per hectare
-    return round(carbon_tonnes * 10 * area_ha, 2)
-
-def add_project_to_db(name, type_, region, area, carbon):
+def add_project(name, type_, region, area, carbon):
     credits = calculate_credits(area, carbon)
-    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''INSERT INTO projects (name, type, region, status, area, carbon, credits, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-              (name, type_, region, 'issued', area, carbon, credits, created_at))
+    c.execute('''
+        INSERT INTO projects (name, type, region, status, area_ha, carbon_tonnes, credits, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (name, type_, region, "Issued", area, carbon, credits, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     return credits
 
 def get_all_projects():
-    c.execute("SELECT * FROM projects")
+    c.execute('SELECT * FROM projects')
     data = c.fetchall()
-    columns = ['ID', 'Name', 'Type', 'Region', 'Status', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Created_at']
-    return pd.DataFrame(data, columns=columns)
+    df = pd.DataFrame(data, columns=[
+        'ID', 'Name', 'Type', 'Region', 'Status', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Created_at'
+    ])
+    return df
 
 def delete_project(project_id):
-    c.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
+    c.execute('DELETE FROM projects WHERE project_id=?', (project_id,))
     conn.commit()
 
 # ------------------------------
 # Admin Dashboard
 # ------------------------------
 def admin_dashboard():
-    st.header("Admin Dashboard")
-
+    st.title("Admin Dashboard")
+    
     st.subheader("Add New Project")
     name = st.text_input("Project Name")
-    type_ = st.selectbox("Project Type", ["Forest", "Wetland", "Blue Carbon"])
+    type_ = st.text_input("Project Type")
     region = st.text_input("Region")
-    area = st.number_input("Area (ha)", min_value=0.0)
-    carbon = st.number_input("Carbon Stock (t)", min_value=0.0)
-
+    area = st.number_input("Area (ha)", min_value=0.0, step=0.1)
+    carbon = st.number_input("Carbon Stock (tonnes)", min_value=0.0, step=0.1)
+    
     if st.button("Add Project"):
-        if name and region:
-            credits = add_project_to_db(name, type_, region, area, carbon)
-            st.success(f"Project '{name}' added! Generated Credits: {credits}")
+        if name and type_ and region:
+            credits = add_project(name, type_, region, area, carbon)
+            st.success(f"Project added successfully! Credits: {credits}")
         else:
-            st.error("Please fill in all required fields!")
+            st.error("Please fill all fields!")
 
     st.subheader("All Projects")
     df = get_all_projects()
     st.dataframe(df)
 
     st.subheader("Delete Project")
-    delete_id = st.number_input("Enter Project ID to Delete", min_value=1, step=1)
+    delete_id = st.number_input("Enter Project ID to delete", min_value=1, step=1)
     if st.button("Delete Project"):
         delete_project(delete_id)
-        st.success(f"Project ID {delete_id} deleted!")
+        st.success(f"Project {delete_id} deleted successfully!")
 
 # ------------------------------
 # Public Dashboard
 # ------------------------------
 def public_dashboard():
-    st.header("Public View")
+    st.title("Public Dashboard")
     st.subheader("All Projects")
     df = get_all_projects()
     st.dataframe(df)
 
 # ------------------------------
-# Main
+# Main app
 # ------------------------------
 def main():
-    st.title("Blue Carbon Registry")
-
-    if 'admin_logged_in' not in st.session_state:
-        st.session_state['admin_logged_in'] = False
-
+    st.sidebar.title("Blue Carbon Registry")
     mode = st.sidebar.selectbox("Select Mode", ["Public", "Admin"])
-
+    
     if mode == "Admin":
-        if not st.session_state['admin_logged_in']:
-            st.subheader("Admin Login")
-            admin_password_input = st.text_input("Enter Admin Password", type="password")
-            login_clicked = st.button("Login")
-            if login_clicked:
-                if admin_password_input == "admin123":  # <-- set your password
-                    st.session_state['admin_logged_in'] = True
-                    st.success("Login successful!")
-                else:
-                    st.error("Wrong password")
-        else:
-            admin_dashboard()
+        password = st.sidebar.text_input("Enter Admin Password", type="password")
+        if st.sidebar.button("Login"):
+            if password == "admin123":  # Change this password as needed
+                st.success("Login Successful!")
+                admin_dashboard()
+            else:
+                st.error("Incorrect Password!")
     else:
         public_dashboard()
 
