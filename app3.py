@@ -1,18 +1,18 @@
 import streamlit as st
 import sqlite3
-from datetime import datetime
 import pandas as pd
+from datetime import datetime
 
-# ----------------------------
-# Database setup
-# ----------------------------
+# ------------------------------
+# Database Setup
+# ------------------------------
 conn = sqlite3.connect("registry.db", check_same_thread=False)
 c = conn.cursor()
 
-# Create table if it doesn't exist
+# Create table if not exists
 c.execute('''
 CREATE TABLE IF NOT EXISTS projects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT,
     type TEXT,
     region TEXT,
@@ -25,12 +25,12 @@ CREATE TABLE IF NOT EXISTS projects (
 ''')
 conn.commit()
 
-# ----------------------------
-# Helper functions
-# ----------------------------
+# ------------------------------
+# Helper Functions
+# ------------------------------
 def calculate_credits(area, carbon):
-    # Example formula: credits = area_ha * carbon_tonnes * 0.5
-    return area * carbon * 0.5
+    # Simple formula for credits; can modify coefficient
+    return area * carbon * 0.1
 
 def add_project(name, type_, region, area, carbon):
     credits = calculate_credits(area, carbon)
@@ -38,85 +38,92 @@ def add_project(name, type_, region, area, carbon):
     c.execute('''
         INSERT INTO projects (name, type, region, status, area_ha, carbon_tonnes, credits, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (name, type_, region, "Issued", area, carbon, credits, created_at))
+    ''', (name, type_, region, 'Issued', area, carbon, credits, created_at))
     conn.commit()
     return credits
 
-def delete_project(project_id):
-    c.execute('DELETE FROM projects WHERE id=?', (project_id,))
-    conn.commit()
-
 def get_all_projects():
-    c.execute('SELECT * FROM projects')
+    c.execute("SELECT * FROM projects")
     data = c.fetchall()
-    df = pd.DataFrame(data, columns=['ID','Name','Type','Region','Status','Area_ha','Carbon_tonnes','Credits','Created_at'])
+    df = pd.DataFrame(data, columns=['ID', 'Name', 'Type', 'Region', 'Status', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Created_at'])
     return df
 
-# ----------------------------
-# Admin dashboard
-# ----------------------------
-def admin_dashboard():
-    st.title("Admin Dashboard")
-    st.subheader("Add a new project")
+def update_status(project_id, new_status):
+    c.execute("UPDATE projects SET status=? WHERE project_id=?", (new_status, project_id))
+    conn.commit()
 
+def delete_project(project_id):
+    c.execute("DELETE FROM projects WHERE project_id=?", (project_id,))
+    conn.commit()
+
+# ------------------------------
+# Admin Dashboard
+# ------------------------------
+def admin_dashboard():
+    st.title("Admin Dashboard - Carbon Registry")
+
+    st.subheader("Add New Project")
     with st.form("add_project_form"):
         name = st.text_input("Project Name")
         type_ = st.text_input("Project Type")
         region = st.text_input("Region")
         area = st.number_input("Area (ha)", min_value=0.0)
-        carbon = st.number_input("Carbon Emission (tonnes)", min_value=0.0)
+        carbon = st.number_input("Carbon Stock (tonnes)", min_value=0.0)
         submitted = st.form_submit_button("Add Project")
         if submitted:
-            credits = add_project(name, type_, region, area, carbon)
-            st.success(f"Project added! Credits calculated: {credits:.2f}")
-            st.session_state["refresh"] = True  # trigger refresh
+            if name and type_ and region:
+                credits = add_project(name, type_, region, area, carbon)
+                st.success(f"Project added successfully! Calculated credits: {credits}")
+            else:
+                st.error("Please fill all the fields!")
 
-    st.subheader("All Projects")
+    st.subheader("Project Dashboard")
     df = get_all_projects()
-    st.dataframe(df)
+    if not df.empty:
+        for index, row in df.iterrows():
+            st.markdown(f"**{row['Name']}** | Type: {row['Type']} | Region: {row['Region']} | Status: {row['Status']} | Area: {row['Area_ha']} ha | Carbon: {row['Carbon_tonnes']} tonnes | Credits: {row['Credits']}")
+            cols = st.columns(3)
+            if cols[0].button("Issue", key=f"issue{row['ID']}"):
+                update_status(row['ID'], "Issued")
+                st.experimental_rerun()
+            if cols[1].button("Retire", key=f"retire{row['ID']}"):
+                update_status(row['ID'], "Retired")
+                st.experimental_rerun()
+            if cols[2].button("Delete", key=f"delete{row['ID']}"):
+                delete_project(row['ID'])
+                st.experimental_rerun()
+    else:
+        st.info("No projects available.")
 
-    st.subheader("Delete a project")
-    project_ids = df['ID'].tolist()
-    delete_id = st.selectbox("Select Project ID to delete", [0]+project_ids, format_func=lambda x: "Select" if x==0 else x)
-    if st.button("Delete Project") and delete_id != 0:
-        delete_project(delete_id)
-        st.success(f"Project ID {delete_id} deleted")
-        st.session_state["refresh"] = True  # trigger refresh
-
-# ----------------------------
-# Public dashboard
-# ----------------------------
+# ------------------------------
+# Public Dashboard
+# ------------------------------
 def public_dashboard():
-    st.title("Public View of Registry")
+    st.title("Public Dashboard - Carbon Registry")
     df = get_all_projects()
-    st.dataframe(df)
+    if not df.empty:
+        st.dataframe(df)
+    else:
+        st.info("No projects available for public view.")
 
-# ----------------------------
-# Main function
-# ----------------------------
+# ------------------------------
+# Main Function
+# ------------------------------
 def main():
-    if "refresh" not in st.session_state:
-        st.session_state["refresh"] = False
-
-    st.sidebar.title("Blue Carbon Registry")
-    mode = st.sidebar.radio("Select Mode", ["Public", "Admin"])
-
+    st.sidebar.title("Carbon Registry")
+    mode = st.sidebar.selectbox("Select Mode", ["Public", "Admin"])
+    
     if mode == "Admin":
-        password = st.sidebar.text_input("Enter admin password", type="password")
-        if password == "admin123":  # change this password as needed
+        password = st.sidebar.text_input("Enter Admin Password", type="password")
+        if password == "admin123":  # Set your admin password here
             admin_dashboard()
         elif password:
-            st.sidebar.error("Wrong password")
+            st.sidebar.error("Incorrect password!")
     else:
         public_dashboard()
 
-    # Handle refresh
-    if st.session_state["refresh"]:
-        st.session_state["refresh"] = False
-        st.experimental_rerun()  # This line can be replaced in future Streamlit versions
-
-# ----------------------------
-# Run the app
-# ----------------------------
+# ------------------------------
+# Run App
+# ------------------------------
 if __name__ == "__main__":
     main()
