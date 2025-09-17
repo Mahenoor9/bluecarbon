@@ -127,19 +127,30 @@ def public_dashboard():
 # -------------------------------
 def main():
     st.title("Blue Carbon Registry")
+
+    # Initialize session state for login
+    if 'logged_in' not in st.session_state:
+        st.session_state.logged_in = False
+
     menu = ["Public View", "Admin Login"]
     choice = st.sidebar.selectbox("Select Mode", menu)
 
     if choice == "Public View":
         public_dashboard()
+
     elif choice == "Admin Login":
-        st.subheader("Admin Login")
-        password = st.text_input("Enter Admin Password", type="password")
-        if st.button("Login"):
-            if password == "admin123":
-                admin_dashboard()
-            else:
-                st.error("Wrong Password!")
+        if not st.session_state.logged_in:
+            st.subheader("Admin Login")
+            password = st.text_input("Enter Admin Password", type="password")
+            if st.button("Login"):
+                if password == "admin123":
+                    st.session_state.logged_in = True
+                    st.success("Login Successful!")
+                else:
+                    st.error("Wrong Password!")
+        else:
+            admin_dashboard()
 
 if __name__ == "__main__":
     main()
+
