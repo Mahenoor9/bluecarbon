@@ -1,7 +1,7 @@
 import streamlit as st
 import sqlite3
-from datetime import datetime
 import pandas as pd
+from datetime import datetime
 
 # ------------------------------
 # Database setup
@@ -9,7 +9,7 @@ import pandas as pd
 conn = sqlite3.connect("registry.db", check_same_thread=False)
 c = conn.cursor()
 
-# Create table if it doesn't exist
+# Create table if it does not exist
 c.execute('''
 CREATE TABLE IF NOT EXISTS projects (
     project_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,85 +26,106 @@ CREATE TABLE IF NOT EXISTS projects (
 conn.commit()
 
 # ------------------------------
-# Function to add project
+# Session state for admin login
+# ------------------------------
+if 'admin_logged_in' not in st.session_state:
+    st.session_state.admin_logged_in = False
+
+# ------------------------------
+# Function to calculate credits
+# ------------------------------
+def calculate_credits(area_ha, carbon_tonnes):
+    # Example formula: credits = carbon * area / 10
+    return round(carbon_tonnes * area_ha / 10, 2)
+
+# ------------------------------
+# Add project to database
 # ------------------------------
 def add_project_to_db(name, type_, region, area, carbon):
-    # Simple formula for credits
-    credits = area * carbon  # You can change formula if needed
+    credits = calculate_credits(area, carbon)
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    status = "issued"
-
+    status = "Issued"
     c.execute('''
-    INSERT INTO projects (name, type, region, status, area, carbon, credits, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO projects (name, type, region, status, area, carbon, credits, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ''', (name, type_, region, status, area, carbon, credits, created_at))
     conn.commit()
     return credits
 
 # ------------------------------
-# Function to fetch all projects
+# Get all projects from database
 # ------------------------------
 def get_all_projects():
     c.execute("SELECT * FROM projects")
     data = c.fetchall()
-    df = pd.DataFrame(data, columns=['ID', 'Name', 'Type', 'Region', 'Status', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Created_at'])
-    return df
+    if data:
+        df = pd.DataFrame(data, columns=['ID', 'Name', 'Type', 'Region', 'Status', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Created_at'])
+        return df
+    else:
+        return pd.DataFrame(columns=['ID', 'Name', 'Type', 'Region', 'Status', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Created_at'])
 
 # ------------------------------
-# Admin Dashboard
+# Admin login
+# ------------------------------
+def admin_login():
+    st.subheader("Admin Login")
+    password = st.text_input("Enter admin password", type="password")
+    login_button = st.button("Login")
+
+    if login_button:
+        if password == "admin123":  # set your admin password here
+            st.session_state.admin_logged_in = True
+        else:
+            st.error("Wrong password")
+
+# ------------------------------
+# Admin dashboard
 # ------------------------------
 def admin_dashboard():
-    st.subheader("Admin Dashboard - Add New Project")
+    st.subheader("Admin Dashboard")
     
-    with st.form(key="admin_form"):
-        name = st.text_input("Project Name")
-        type_ = st.text_input("Project Type")
-        region = st.text_input("Region")
-        area = st.number_input("Area (ha)", min_value=0.0, step=0.01)
-        carbon = st.number_input("Carbon Stock (tonnes)", min_value=0.0, step=0.01)
-        submit_button = st.form_submit_button(label="Add Project")
-
-        if submit_button:
-            if name and type_ and region:
-                credits = add_project_to_db(name, type_, region, area, carbon)
-                st.success(f"Project '{name}' added successfully! Calculated Credits: {credits}")
-            else:
-                st.error("Please fill in all fields.")
-
-    st.subheader("All Projects")
+    # Project input form
+    st.write("Add New Project")
+    name = st.text_input("Project Name")
+    type_ = st.selectbox("Project Type", ["Forestry", "Wetlands", "Coastal", "Other"])
+    region = st.text_input("Region")
+    area = st.number_input("Area (ha)", min_value=0.0, step=0.1)
+    carbon = st.number_input("Carbon Stock (tonnes)", min_value=0.0, step=0.1)
+    
+    if st.button("Add Project"):
+        if name and type_ and region and area > 0 and carbon > 0:
+            credits = add_project_to_db(name, type_, region, area, carbon)
+            st.success(f"Project added! Credits generated: {credits}")
+        else:
+            st.error("Please fill all fields correctly")
+    
+    # Show all projects
+    st.write("All Projects")
     df = get_all_projects()
     st.dataframe(df)
 
 # ------------------------------
-# Public View
+# Public dashboard
 # ------------------------------
 def public_dashboard():
-    st.subheader("Public View - Carbon Projects")
+    st.subheader("Public View")
+    st.write("View all registered carbon projects")
     df = get_all_projects()
-    if not df.empty:
-        st.dataframe(df[['Name', 'Type', 'Region', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Status']])
-    else:
-        st.info("No projects available yet.")
+    st.dataframe(df)
 
 # ------------------------------
-# Main App
+# Main function
 # ------------------------------
 def main():
     st.title("Blue Carbon Registry")
-
-    menu = ["Public", "Admin"]
-    choice = st.sidebar.selectbox("Choose Mode", menu)
-
-    if choice == "Admin":
-        st.subheader("Admin Login")
-        password = st.text_input("Enter Admin Password", type="password")
-        login_button = st.button("Login")
-        if login_button:
-            if password == "admin123":  # You can change password here
-                st.success("Logged in as Admin")
-                admin_dashboard()
-            else:
-                st.error("Incorrect password. Try again.")
+    
+    mode = st.radio("Choose mode:", ["Public", "Admin"])
+    
+    if mode == "Admin":
+        if not st.session_state.admin_logged_in:
+            admin_login()
+        else:
+            admin_dashboard()
     else:
         public_dashboard()
 
