@@ -1,6 +1,3 @@
-# ------------------------------
-# Imports
-# ------------------------------
 import streamlit as st
 import sqlite3
 import pandas as pd
@@ -9,193 +6,134 @@ from datetime import datetime
 # ------------------------------
 # Database setup
 # ------------------------------
-
-# Connect to local SQLite database
-# A file called registry.db will be created in your folder if it doesn’t exist
 conn = sqlite3.connect("registry.db", check_same_thread=False)
 c = conn.cursor()
 
-# Create the main projects table
-c.execute(
-    '''
-    CREATE TABLE IF NOT EXISTS projects (
-        project_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        type TEXT,
-        region TEXT,
-        area_ha REAL,
-        carbon_stock REAL,
-        credits REAL,
-        status TEXT,
-        created_at TEXT
-    )
-    '''
-)
-conn.commit()
+# Create tables if not exist
+c.execute('''CREATE TABLE IF NOT EXISTS projects
+             (project_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT,
+              type TEXT,
+              region TEXT,
+              status TEXT,
+              area REAL,
+              carbon REAL,
+              credits REAL,
+              created_at TEXT)''')
+
+# Ensure schema has all required columns (handles older DBs)
+
+def ensure_project_table_schema():
+    c.execute("PRAGMA table_info(projects)")
+    existing_cols = {row[1] for row in c.fetchall()}
+    required = [
+        ("status", "TEXT", "issued"),
+        ("area", "REAL", 0.0),
+        ("carbon", "REAL", 0.0),
+        ("credits", "REAL", 0.0),
+        ("created_at", "TEXT", None),
+    ]
+    for col_name, col_type, default in required:
+        if col_name not in existing_cols:
+            c.execute(f"ALTER TABLE projects ADD COLUMN {col_name} {col_type}")
+            if default is not None:
+                c.execute(f"UPDATE projects SET {col_name} = ?", (default,))
+    conn.commit()
+
+ensure_project_table_schema()
 
 # ------------------------------
 # Helper functions
 # ------------------------------
 
-def add_project(name, ptype, region, area, carbon_stock, credits, status="Pending"):
-    """
-    Insert a new project entry into the database.
-    Each project will be assigned a unique project_id.
-    """
-    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute(
-        '''
-        INSERT INTO projects 
-        (name, type, region, area_ha, carbon_stock, credits, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''',
-        (name, ptype, region, area, carbon_stock, credits, status, created_at)
-    )
-    conn.commit()
+def calculate_credits(area_ha, carbon_tonnes):
+    # Example formula: 1 credit per 0.1 tonne CO2 per hectare
+    return round(carbon_tonnes * 10 * area_ha, 2)
 
+def add_project_to_db(name, type_, region, area, carbon):
+    credits = calculate_credits(area, carbon)
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute('''INSERT INTO projects (name, type, region, status, area, carbon, credits, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+              (name, type_, region, 'issued', area, carbon, credits, created_at))
+    conn.commit()
+    return credits
 
 def get_all_projects():
-    """
-    Retrieve all project records from the database.
-    Returns a Pandas DataFrame for easy visualization.
-    """
-    query = "SELECT * FROM projects"
-    df = pd.read_sql(query, conn)
-    return df
+    c.execute("SELECT * FROM projects")
+    data = c.fetchall()
+    columns = ['ID', 'Name', 'Type', 'Region', 'Status', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Created_at']
+    return pd.DataFrame(data, columns=columns)
 
-
-def update_status(project_id, new_status):
-    """
-    Update the status of a project (Pending, Issued, Retired).
-    """
-    c.execute("UPDATE projects SET status=? WHERE project_id=?", (new_status, project_id))
+def delete_project(project_id):
+    c.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
     conn.commit()
 
-
 # ------------------------------
-# Streamlit UI setup
+# Admin Dashboard
 # ------------------------------
+def admin_dashboard():
+    st.header("Admin Dashboard")
 
-st.set_page_config(
-    page_title="Blue Carbon Registry",
-    layout="wide"
-)
+    st.subheader("Add New Project")
+    name = st.text_input("Project Name")
+    type_ = st.selectbox("Project Type", ["Forest", "Wetland", "Blue Carbon"])
+    region = st.text_input("Region")
+    area = st.number_input("Area (ha)", min_value=0.0)
+    carbon = st.number_input("Carbon Stock (t)", min_value=0.0)
 
-# App Title
-st.title("🌱 Blue Carbon MRV & Registry System")
+    if st.button("Add Project"):
+        if name and region:
+            credits = add_project_to_db(name, type_, region, area, carbon)
+            st.success(f"Project '{name}' added! Generated Credits: {credits}")
+        else:
+            st.error("Please fill in all required fields!")
 
-# Sidebar menu
-menu = st.sidebar.selectbox(
-    "Navigate",
-    ["Upload Project", "Admin Panel", "Public Ledger", "Dashboard"]
-)
-
-# ------------------------------
-# Upload Project Page
-# ------------------------------
-if menu == "Upload Project":
-
-    st.header("📤 Submit New Project / Industry Data")
-    st.write("Fill out the form below to register a new project or industry offset activity.")
-
-    with st.form("project_form", clear_on_submit=True):
-        # Input fields
-        name = st.text_input("Project / Industry Name")
-        ptype = st.selectbox("Type of Project", ["Mangrove Restoration", "Seagrass", "Industry Offset"])
-        region = st.text_input("Geographical Region")
-        area = st.number_input("Area (ha)", min_value=0.0, step=0.1, format="%.2f")
-        carbon_stock = st.number_input("Carbon Stock (tonnes)", min_value=0.0, step=0.1, format="%.2f")
-
-        # Submit button
-        submitted = st.form_submit_button("Submit Project")
-
-        # Processing logic
-        if submitted:
-            if name and region and area > 0 and carbon_stock > 0:
-                credits = carbon_stock * 0.9   # Example credit calculation: 90% of carbon stock
-                add_project(name, ptype, region, area, carbon_stock, credits)
-                st.success(f"✅ Project '{name}' submitted successfully!")
-                st.info(f"Estimated Carbon Credits = **{credits:.2f}**")
-            else:
-                st.error("⚠️ Please fill in all fields correctly before submitting.")
-
-
-# ------------------------------
-# Admin Panel Page
-# ------------------------------
-elif menu == "Admin Panel":
-
-    st.header("🛠 Admin Panel")
-    st.write("View submitted projects and update their verification status.")
-
+    st.subheader("All Projects")
     df = get_all_projects()
+    st.dataframe(df)
 
-    if not df.empty:
-        st.subheader("All Projects in Registry")
-        st.dataframe(df, use_container_width=True)
-
-        # Select a project to update
-        project_ids = df["project_id"].tolist()
-        selected_id = st.selectbox("Select Project ID to Update", project_ids)
-
-        # Status options
-        new_status = st.radio("New Status", ["Pending", "Issued", "Retired"], horizontal=True)
-
-        if st.button("Update Status"):
-            update_status(selected_id, new_status)
-            st.success(f"✅ Status updated for Project ID {selected_id} → {new_status}")
-
-    else:
-        st.info("No projects found in the registry yet.")
-
+    st.subheader("Delete Project")
+    delete_id = st.number_input("Enter Project ID to Delete", min_value=1, step=1)
+    if st.button("Delete Project"):
+        delete_project(delete_id)
+        st.success(f"Project ID {delete_id} deleted!")
 
 # ------------------------------
-# Public Ledger Page
+# Public Dashboard
 # ------------------------------
-elif menu == "Public Ledger":
-
-    st.header("📖 Public Carbon Credit Ledger")
-    st.write("A transparent view of all registered projects and their issued credits.")
-
+def public_dashboard():
+    st.header("Public View")
+    st.subheader("All Projects")
     df = get_all_projects()
-
-    if not df.empty:
-        # Show selected fields only
-        ledger_df = df[["project_id", "name", "region", "credits", "status", "created_at"]]
-        st.dataframe(ledger_df, use_container_width=True)
-    else:
-        st.info("Ledger is empty. No projects registered yet.")
-
+    st.dataframe(df)
 
 # ------------------------------
-# Dashboard Page
+# Main
 # ------------------------------
-elif menu == "Dashboard":
+def main():
+    st.title("Blue Carbon Registry")
 
-    st.header("📊 Registry Dashboard")
-    st.write("Summary of carbon projects, credits, and status.")
+    if 'admin_logged_in' not in st.session_state:
+        st.session_state['admin_logged_in'] = False
 
-    df = get_all_projects()
+    mode = st.sidebar.selectbox("Select Mode", ["Public", "Admin"])
 
-    if not df.empty:
-        # Metrics
-        col1, col2, col3 = st.columns(3)
-        total_projects = len(df)
-        total_credits = round(df["credits"].sum(), 2)
-        verified_projects = len(df[df["status"] == "Issued"])
-
-        col1.metric("🌍 Total Projects", total_projects)
-        col2.metric("🌱 Total Credits", total_credits)
-        col3.metric("✅ Verified Projects", verified_projects)
-
-        # Bar chart: credits by status
-        st.subheader("Credits by Status")
-        credits_by_status = df.groupby("status")["credits"].sum()
-        st.bar_chart(credits_by_status)
-
-        # Optional table for insights
-        st.subheader("Project Summary Table")
-        st.dataframe(df, use_container_width=True)
-
+    if mode == "Admin":
+        if not st.session_state['admin_logged_in']:
+            st.subheader("Admin Login")
+            admin_password_input = st.text_input("Enter Admin Password", type="password")
+            login_clicked = st.button("Login")
+            if login_clicked:
+                if admin_password_input == "admin123":  # <-- set your password
+                    st.session_state['admin_logged_in'] = True
+                    st.success("Login successful!")
+                else:
+                    st.error("Wrong password")
+        else:
+            admin_dashboard()
     else:
-        st.info("No data available for dashboard.")
+        public_dashboard()
+
+if __name__ == "__main__":
+    main()
