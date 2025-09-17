@@ -15,124 +15,104 @@ c.execute('''CREATE TABLE IF NOT EXISTS projects
               name TEXT,
               type TEXT,
               region TEXT,
-              area_ha REAL,
-              carbon_tonnes REAL,
-              credits REAL,
               status TEXT,
+              area REAL,
+              carbon REAL,
+              credits REAL,
               created_at TEXT)''')
-conn.commit()
 
 # ------------------------------
-# Session state initialization
+# Helper functions
 # ------------------------------
-if "admin_logged_in" not in st.session_state:
-    st.session_state.admin_logged_in = False
 
-if "admin_password" not in st.session_state:
-    st.session_state.admin_password = "Admin@123"  # Change this to your desired password
+def calculate_credits(area_ha, carbon_tonnes):
+    # Example formula: 1 credit per 0.1 tonne CO2 per hectare
+    return round(carbon_tonnes * 10 * area_ha, 2)
 
-# ------------------------------
-# Utility functions
-# ------------------------------
-def calculate_credits(area, carbon_tonnes):
-    # Simple formula: 1 credit per tonne of carbon * area factor
-    # You can change this formula as per your rules
-    return carbon_tonnes * area * 0.1
-
-def add_project_to_db(name, type_, region, area, carbon, status="Issued"):
+def add_project_to_db(name, type_, region, area, carbon):
     credits = calculate_credits(area, carbon)
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''INSERT INTO projects 
-                 (name, type, region, area_ha, carbon_tonnes, credits, status, created_at)
+    c.execute('''INSERT INTO projects (name, type, region, status, area, carbon, credits, created_at)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-              (name, type_, region, area, carbon, credits, status, created_at))
+              (name, type_, region, 'issued', area, carbon, credits, created_at))
     conn.commit()
     return credits
 
-def load_projects():
-    df = pd.read_sql_query("SELECT * FROM projects", conn)
-    return df
+def get_all_projects():
+    c.execute("SELECT * FROM projects")
+    data = c.fetchall()
+    columns = ['ID', 'Name', 'Type', 'Region', 'Status', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Created_at']
+    return pd.DataFrame(data, columns=columns)
+
+def delete_project(project_id):
+    c.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
+    conn.commit()
 
 # ------------------------------
-# Admin login page
-# ------------------------------
-def admin_login():
-    st.title("Admin Login")
-    password_input = st.text_input("Enter admin password", type="password")
-
-    if st.button("Login"):
-        if password_input == st.session_state.admin_password:
-            st.session_state.admin_logged_in = True
-            st.success("Logged in successfully!")
-        else:
-            st.error("Wrong password! Try again.")
-
-# ------------------------------
-# Admin dashboard
+# Admin Dashboard
 # ------------------------------
 def admin_dashboard():
-    st.title("Admin Dashboard - Blue Carbon Registry")
+    st.header("Admin Dashboard")
 
     st.subheader("Add New Project")
     name = st.text_input("Project Name")
-    type_ = st.selectbox("Project Type", ["Forestry", "Mangrove", "Wetland", "Other"])
+    type_ = st.selectbox("Project Type", ["Forest", "Wetland", "Blue Carbon"])
     region = st.text_input("Region")
-    area = st.number_input("Area (ha)", min_value=0.0, step=0.1)
-    carbon = st.number_input("Carbon Stock (tonnes)", min_value=0.0, step=0.1)
+    area = st.number_input("Area (ha)", min_value=0.0)
+    carbon = st.number_input("Carbon Stock (t)", min_value=0.0)
 
     if st.button("Add Project"):
-        if name and region and area > 0 and carbon > 0:
+        if name and region:
             credits = add_project_to_db(name, type_, region, area, carbon)
-            st.success(f"Project added! Credits generated: {credits:.2f}")
+            st.success(f"Project '{name}' added! Generated Credits: {credits}")
         else:
-            st.error("Please fill all fields correctly.")
+            st.error("Please fill in all required fields!")
 
-    st.subheader("Uploaded Projects")
-    projects_df = load_projects()
-    st.dataframe(projects_df)
+    st.subheader("All Projects")
+    df = get_all_projects()
+    st.dataframe(df)
+
+    st.subheader("Delete Project")
+    delete_id = st.number_input("Enter Project ID to Delete", min_value=1, step=1)
+    if st.button("Delete Project"):
+        delete_project(delete_id)
+        st.success(f"Project ID {delete_id} deleted!")
 
 # ------------------------------
-# Public view
+# Public Dashboard
 # ------------------------------
-def public_view():
-    st.title("Public Blue Carbon Registry")
-    st.subheader("View Projects")
-
-    projects_df = load_projects()
-    st.dataframe(projects_df)
-
-    st.subheader("Upload CSV File")
-    uploaded_file = st.file_uploader("Upload CSV (Region, Area_ha, Carbon_Stock_tonnes, Type, Status)", type=["csv"])
-    if uploaded_file is not None:
-        try:
-            csv_data = pd.read_csv(uploaded_file)
-            for idx, row in csv_data.iterrows():
-                add_project_to_db(
-                    name=row.get("Project_Name", f"Project_{idx+1}"),
-                    type_=row.get("Type", "Other"),
-                    region=row.get("Region", "Unknown"),
-                    area=float(row.get("Area_ha", 0)),
-                    carbon=float(row.get("Carbon_Stock_tonnes", 0)),
-                    status=row.get("Status", "Issued")
-                )
-            st.success("CSV uploaded and projects added successfully!")
-        except Exception as e:
-            st.error(f"Error processing CSV: {e}")
+def public_dashboard():
+    st.header("Public View")
+    st.subheader("All Projects")
+    df = get_all_projects()
+    st.dataframe(df)
 
 # ------------------------------
 # Main
 # ------------------------------
 def main():
-    st.sidebar.title("Navigation")
-    mode = st.sidebar.selectbox("Choose Mode", ["Public", "Admin"])
+    st.title("Blue Carbon Registry")
+
+    if 'admin_logged_in' not in st.session_state:
+        st.session_state['admin_logged_in'] = False
+
+    mode = st.sidebar.selectbox("Select Mode", ["Public", "Admin"])
 
     if mode == "Admin":
-        if st.session_state.admin_logged_in:
-            admin_dashboard()
+        if not st.session_state['admin_logged_in']:
+            st.subheader("Admin Login")
+            admin_password_input = st.text_input("Enter Admin Password", type="password")
+            login_clicked = st.button("Login")
+            if login_clicked:
+                if admin_password_input == "admin123":  # <-- set your password
+                    st.session_state['admin_logged_in'] = True
+                    st.success("Login successful!")
+                else:
+                    st.error("Wrong password")
         else:
-            admin_login()
+            admin_dashboard()
     else:
-        public_view()
+        public_dashboard()
 
 if __name__ == "__main__":
     main()
