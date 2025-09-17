@@ -9,99 +9,95 @@ from datetime import datetime
 conn = sqlite3.connect("registry.db", check_same_thread=False)
 c = conn.cursor()
 
-# Create tables if not exist
+# Create projects table if not exists
 c.execute('''CREATE TABLE IF NOT EXISTS projects
              (project_id INTEGER PRIMARY KEY AUTOINCREMENT,
               name TEXT,
               type TEXT,
               region TEXT,
               status TEXT,
+              area_ha REAL,
+              carbon_stock_tonnes REAL,
               credits REAL,
-              created_at TEXT)''')
+              created_on TEXT)''')
 conn.commit()
 
 # ------------------------------
-# Authentication (Admin Login)
+# Helper functions
 # ------------------------------
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "bluecarbon123"
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+def calculate_credits(area, carbon_stock):
+    """
+    Formula for calculating credits:
+    Example: 1 credit = 1 tonne CO2 equivalent
+    Modify this formula as needed
+    """
+    # Simple example: credits proportional to carbon_stock
+    credits = carbon_stock  
+    return credits
 
-# Login form
-if not st.session_state.logged_in:
-    st.title("🌍 BlueCarbon Registry")
-    mode = st.radio("Choose Mode:", ["Public Mode", "Admin Login"])
+def add_project(name, type_, region, status, area, carbon_stock):
+    credits = calculate_credits(area, carbon_stock)
+    created_on = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute('''INSERT INTO projects
+                 (name, type, region, status, area_ha, carbon_stock_tonnes, credits, created_on)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+              (name, type_, region, status, area, carbon_stock, credits, created_on))
+    conn.commit()
 
-    if mode == "Admin Login":
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        if st.button("Login"):
-            if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-                st.session_state.logged_in = True
-                st.success("✅ Login successful! Welcome Admin.")
-            else:
-                st.error("❌ Invalid credentials")
+def get_all_projects():
+    c.execute("SELECT * FROM projects")
+    rows = c.fetchall()
+    df = pd.DataFrame(rows, columns=[
+        "Project ID", "Name", "Type", "Region", "Status",
+        "Area (ha)", "Carbon Stock (tonnes)", "Credits", "Created On"
+    ])
+    return df
 
 # ------------------------------
-# Public Mode (View only)
+# Streamlit UI
 # ------------------------------
-if not st.session_state.logged_in:
-    st.subheader("📖 Public Registry View")
-    projects = pd.read_sql("SELECT * FROM projects", conn)
-    st.dataframe(projects)
 
-# ------------------------------
-# Admin Mode (Full Access)
-# ------------------------------
-if st.session_state.logged_in:
-    st.sidebar.title("🔑 Admin Dashboard")
-    st.sidebar.write(f"👤 Logged in as: {ADMIN_USERNAME}")
-    if st.sidebar.button("🚪 Logout"):
-        st.session_state.logged_in = False
-        st.rerun()
+st.title("🌱 Blue Carbon Registry")
 
-    menu = st.sidebar.radio("Select Action:", ["View Projects", "Add Project", "Update Status", "Delete Project"])
+# Mode selection
+mode = st.sidebar.selectbox("Select Mode", ["Public", "Admin"])
 
-    # View all projects
-    if menu == "View Projects":
-        st.subheader("📋 All Registered Projects")
-        projects = pd.read_sql("SELECT * FROM projects", conn)
-        st.dataframe(projects)
+# Admin password
+ADMIN_PASSWORD = "admin123"  # change this password
 
-    # Add new project
-    elif menu == "Add Project":
-        st.subheader("➕ Add New Project")
-        name = st.text_input("Project Name")
-        type_ = st.selectbox("Project Type", ["Mangrove", "Industry", "Other"])
-        region = st.text_input("Region")
-        credits = st.number_input("Carbon Credits", min_value=0.0)
-        if st.button("Add Project"):
-            c.execute("INSERT INTO projects (name, type, region, status, credits, created_at) VALUES (?,?,?,?,?,?)",
-                      (name, type_, region, "Issued", credits, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-            conn.commit()
-            st.success("✅ Project added successfully!")
+if mode == "Admin":
+    password = st.sidebar.text_input("Enter Admin Password", type="password")
+    if password == ADMIN_PASSWORD:
+        st.subheader("Admin Dashboard")
 
-    # Update project status
-    elif menu == "Update Status":
-        st.subheader("✏️ Update Project Status")
-        projects = pd.read_sql("SELECT * FROM projects", conn)
-        st.dataframe(projects)
-        project_id = st.number_input("Enter Project ID to Update", min_value=1)
-        new_status = st.selectbox("New Status", ["Issued", "Updated", "Retired", "Revoked"])
-        if st.button("Update"):
-            c.execute("UPDATE projects SET status=? WHERE project_id=?", (new_status, project_id))
-            conn.commit()
-            st.success("✅ Project status updated!")
+        # Create new project
+        st.markdown("### Create New Project")
+        with st.form("add_project_form"):
+            name = st.text_input("Project Name")
+            type_ = st.selectbox("Project Type", ["Reforestation", "Afforestation", "Mangrove"])
+            region = st.text_input("Region")
+            status = st.selectbox("Status", ["Issued", "Updated", "Retired", "Revoked"])
+            area = st.number_input("Area (ha)", min_value=0.0)
+            carbon_stock = st.number_input("Carbon Stock (tonnes)", min_value=0.0)
+            submitted = st.form_submit_button("Add Project")
+            if submitted:
+                if name and region:
+                    add_project(name, type_, region, status, area, carbon_stock)
+                    st.success(f"Project '{name}' added successfully!")
+                else:
+                    st.error("Project Name and Region are required!")
 
-    # Delete project
-    elif menu == "Delete Project":
-        st.subheader("🗑️ Delete Project")
-        projects = pd.read_sql("SELECT * FROM projects", conn)
-        st.dataframe(projects)
-        project_id = st.number_input("Enter Project ID to Delete", min_value=1)
-        if st.button("Delete"):
-            c.execute("DELETE FROM projects WHERE project_id=?", (project_id,))
-            conn.commit()
-            st.warning("⚠️ Project deleted successfully!")
+        # View all projects
+        st.markdown("### All Projects")
+        df = get_all_projects()
+        st.dataframe(df)
+
+    else:
+        st.error("🔒 Incorrect password. Access denied.")
+
+else:  # Public mode
+    st.subheader("Public View")
+    st.markdown("You can view all registered projects below:")
+    df = get_all_projects()
+    st.dataframe(df)
