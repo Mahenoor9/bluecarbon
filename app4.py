@@ -207,13 +207,16 @@ def admin_dashboard():
             "Upload CSV files", type=["csv"], accept_multiple_files=True
         )
 
+        all_dfs = []
         if uploaded_files:
             for file in uploaded_files:
                 st.markdown(f"### 📂 {file.name}")
                 df = pd.read_csv(file)
                 st.dataframe(df.head())
+                all_dfs.append(df)
 
-                if st.button(f"Import {file.name}", key=file.name):
+            if st.button("Add All Projects"):
+                for df in all_dfs:
                     for _, row in df.iterrows():
                         try:
                             add_project(
@@ -225,8 +228,8 @@ def admin_dashboard():
                             )
                         except Exception as e:
                             st.warning(f"Skipping row due to error: {e}")
-                    st.success(f"{file.name} imported successfully!")
-                    do_rerun()
+                st.success("All uploaded projects imported successfully!")
+                do_rerun()
 
     # Projects Overview
     st.subheader("Projects Overview")
