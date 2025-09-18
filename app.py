@@ -232,11 +232,11 @@ def admin_dashboard():
                         carbon = row.get("carbon_tonnes")
 
                         # Fill missing area
-                        if area == "" or area is None:
+                        if pd.isna(area):
                             area = avg_area_per_type.get(type_, 5.0)  # default 5 ha if no data
 
                         # Fill missing carbon
-                        if carbon == "" or carbon is None:
+                        if pd.isna(carbon):
                             carbon = float(area) * 4.0  # estimate carbon based on area
 
                         try:
