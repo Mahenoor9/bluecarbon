@@ -3,6 +3,7 @@ import sqlite3
 from datetime import datetime
 import pandas as pd
 import io
+import os
 
 # -------------------
 # Database Setup
@@ -187,7 +188,7 @@ def admin_dashboard():
             else:
                 st.error("Fill all required fields!")
 
-    # Bulk Upload
+    # Bulk Upload with AI-like auto-fill
     elif input_mode == "Bulk CSV Upload":
         st.subheader("Upload Multiple CSV Files")
 
@@ -212,31 +213,39 @@ def admin_dashboard():
             for file in uploaded_files:
                 st.markdown(f"### 📂 {file.name}")
                 df = pd.read_csv(file)
-
-                # --- AI Integration Start ---
-                # If essential columns are missing, auto-fill them
-                required_cols = ["name", "type", "region", "area_ha", "carbon_tonnes"]
-                for col in required_cols:
-                    if col not in df.columns:
-                        if col in ["area_ha", "carbon_tonnes"]:
-                            df[col] = 0.0  # default numeric values
-                        else:
-                            df[col] = "Unknown"  # default text values
-                # --- AI Integration End ---
-
                 st.dataframe(df.head())
                 all_dfs.append(df)
 
             if st.button("Add All Projects"):
+                # Compute average areas for types already in DB
+                existing_df = get_all_projects()
+                avg_area_per_type = {}
+                if not existing_df.empty:
+                    for t in existing_df["Type"].unique():
+                        avg_area_per_type[t] = existing_df.loc[existing_df["Type"] == t, "Area_ha"].mean()
+
                 for df in all_dfs:
                     for _, row in df.iterrows():
+                        # AI-like auto-fill
+                        type_ = row["type"]
+                        area = row.get("area_ha")
+                        carbon = row.get("carbon_tonnes")
+
+                        # Fill missing area
+                        if area == "" or area is None:
+                            area = avg_area_per_type.get(type_, 5.0)  # default 5 ha if no data
+
+                        # Fill missing carbon
+                        if carbon == "" or carbon is None:
+                            carbon = float(area) * 4.0  # estimate carbon based on area
+
                         try:
                             add_project(
-                                row["name"],
-                                row["type"],
-                                row["region"],
-                                float(row.get("area_ha", 0)),
-                                float(row.get("carbon_tonnes", 0))
+                                name=row["name"],
+                                type_=type_,
+                                region=row["region"],
+                                area=float(area),
+                                carbon=float(carbon)
                             )
                         except Exception as e:
                             st.warning(f"Skipping row due to error: {e}")
