@@ -3,7 +3,6 @@ import sqlite3
 from datetime import datetime
 import pandas as pd
 import io
-import os
 
 # -------------------
 # Database Setup
@@ -181,14 +180,20 @@ def admin_dashboard():
         carbon = st.number_input("Carbon Stored (tonnes)", min_value=0.0)
 
         if st.button("Add Project"):
-            if name and type_ and region:
+            if name and type_ and region and area > 0:
+                # -------------------
+                # Only auto-fill carbon, never area
+                # -------------------
+                if carbon == 0.0:
+                    carbon = area * 4.0
+
                 add_project(name, type_, region, area, carbon)
                 st.success("Project added successfully!")
                 do_rerun()
             else:
-                st.error("Fill all required fields!")
+                st.error("Fill all required fields and make sure area > 0!")
 
-    # Bulk Upload with AI-like auto-fill
+    # Bulk Upload
     elif input_mode == "Bulk CSV Upload":
         st.subheader("Upload Multiple CSV Files")
 
@@ -217,36 +222,26 @@ def admin_dashboard():
                 all_dfs.append(df)
 
             if st.button("Add All Projects"):
-                # Compute average areas for types already in DB
-                existing_df = get_all_projects()
-                avg_area_per_type = {}
-                if not existing_df.empty:
-                    for t in existing_df["Type"].unique():
-                        avg_area_per_type[t] = existing_df.loc[existing_df["Type"] == t, "Area_ha"].mean()
-
                 for df in all_dfs:
                     for _, row in df.iterrows():
-                        # AI-like auto-fill
-                        type_ = row["type"]
-                        area = row.get("area_ha")
-                        carbon = row.get("carbon_tonnes")
-
-                        # Fill missing area
-                        if pd.isna(area):
-                            area = avg_area_per_type.get(type_, 5.0)  # default 5 ha if no data
-
-                        # Fill missing carbon
-                        if pd.isna(carbon):
-                            carbon = float(area) * 4.0  # estimate carbon based on area
-
                         try:
-                            add_project(
-                                name=row["name"],
-                                type_=type_,
-                                region=row["region"],
-                                area=float(area),
-                                carbon=float(carbon)
-                            )
+                            name = row["name"]
+                            type_ = row["type"]
+                            region = row["region"]
+                            area = row.get("area_ha")
+                            carbon = row.get("carbon_tonnes")
+
+                            # -------------------
+                            # Only auto-fill carbon if missing
+                            # Area must be provided
+                            # -------------------
+                            if pd.isna(area) or area <= 0:
+                                st.warning(f"Skipping row '{name}' because area is missing or zero!")
+                                continue
+                            if pd.isna(carbon):
+                                carbon = float(area) * 4.0
+
+                            add_project(name, type_, region, float(area), float(carbon))
                         except Exception as e:
                             st.warning(f"Skipping row due to error: {e}")
                 st.success("All uploaded projects imported successfully!")
