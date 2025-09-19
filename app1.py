@@ -197,53 +197,54 @@ def get_all_projects():
 # -------------------
 # Admin Dashboard
 # -------------------
+# -------------------
+# Admin Dashboard
+# -------------------
 def admin_dashboard():
     st.title("Admin Dashboard")
 
     input_mode = st.radio("Choose Input Method", ["Manual Entry", "Bulk CSV Upload"])
 
-    # Manual Entry
+    # -------------------
+    # Manual Entry using st.form
+    # -------------------
     if input_mode == "Manual Entry":
         st.subheader("Add New Project")
 
-        # Input fields
-        name = st.text_input("Project Name")
-        type_ = st.text_input("Project Type")
-        region = st.text_input("Region")
-        area = st.number_input("Area (ha)", min_value=0.0)
-        carbon = st.number_input("Carbon Stored (tonnes)", min_value=0.0)
+        with st.form("manual_project_form"):
+            name = st.text_input("Project Name")
+            type_ = st.text_input("Project Type")
+            region = st.text_input("Region")
+            area = st.number_input("Area (ha)", min_value=0.0)
+            carbon = st.number_input("Carbon Stored (tonnes)", min_value=0.0)
 
-        # Initialize session state to avoid re-running LLM
-        if "carbon_estimate" not in st.session_state:
-            st.session_state.carbon_estimate = 0.0
-        if "carbon_explanation" not in st.session_state:
-            st.session_state.carbon_explanation = ""
+            submitted = st.form_submit_button("Add Project")
 
-        if st.button("Add Project"):
+        if submitted:
             if name and type_ and region and area > 0:
                 # Only call LLM if carbon missing
                 if carbon == 0.0:
                     fallback = area * 4.0
                     prompt = f"Estimate carbon tonnes for a mangrove project with area {area} ha in India. Suggest a reasonable range if uncertain."
                     with st.spinner("Estimating carbon with LLM..."):
-                        st.session_state.carbon_estimate = ask_llm_number(prompt, fallback)
-                    carbon = st.session_state.carbon_estimate
+                        carbon = ask_llm_number(prompt, fallback)
 
-                # Add project to DB
                 add_project(name, type_, region, area, carbon)
 
                 # Optional explanation
                 explanation_prompt = f"Explain why a mangrove project with area {area} ha has carbon storage of {carbon} tonnes."
                 with st.spinner("Generating explanation..."):
-                    st.session_state.carbon_explanation = ask_llm(explanation_prompt)
-                st.info(st.session_state.carbon_explanation)
+                    explanation = ask_llm(explanation_prompt)
+                st.info(explanation)
 
                 st.success("Project added successfully!")
                 do_rerun()
             else:
                 st.error("Fill all required fields and make sure area > 0!")
 
+    # -------------------
     # Bulk Upload
+    # -------------------
     elif input_mode == "Bulk CSV Upload":
         st.subheader("Upload Multiple CSV Files")
 
@@ -263,15 +264,18 @@ def admin_dashboard():
             "Upload CSV files", type=["csv"], accept_multiple_files=True
         )
 
-        all_dfs = []
         if uploaded_files:
+            all_dfs = []
             for file in uploaded_files:
                 st.markdown(f"### 📂 {file.name}")
                 df = pd.read_csv(file)
                 st.dataframe(df.head())
                 all_dfs.append(df)
 
-            if st.button("Add All Projects"):
+            with st.form("bulk_upload_form"):
+                submitted = st.form_submit_button("Add All Projects")
+
+            if submitted:
                 for df in all_dfs:
                     for _, row in df.iterrows():
                         try:
@@ -296,10 +300,13 @@ def admin_dashboard():
 
                         except Exception as e:
                             st.warning(f"Skipping row due to error: {e}")
+
                 st.success("All uploaded projects imported successfully!")
                 do_rerun()
 
+    # -------------------
     # Projects Overview
+    # -------------------
     st.subheader("Projects Overview")
     df = get_all_projects()
     if not df.empty:
@@ -353,4 +360,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
