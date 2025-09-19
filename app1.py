@@ -5,12 +5,17 @@ import pandas as pd
 import io
 
 # -------------------
-# Database Setup
+# DATABASE SETUP
 # -------------------
+
+# Connect to SQLite database
 conn = sqlite3.connect("registry.db", check_same_thread=False)
 c = conn.cursor()
+
+# Ensure foreign key support
 c.execute("PRAGMA foreign_keys = ON")
 
+# Create projects table if it does not exist
 c.execute('''
 CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,61 +27,23 @@ CREATE TABLE IF NOT EXISTS projects (
     credits REAL,
     status TEXT,
     created_at TEXT,
-    carbon_explanation TEXT
+    explanation TEXT
 )
 ''')
 conn.commit()
 
-# -------------------
-# Ensure Schema
-# -------------------
-def ensure_projects_schema():
-    c.execute("PRAGMA table_info(projects)")
-    cols = {row[1] for row in c.fetchall()}
-
-    if "area_ha" not in cols:
-        c.execute("ALTER TABLE projects ADD COLUMN area_ha REAL")
-        c.execute("UPDATE projects SET area_ha = COALESCE(area_ha, 0.0)")
-
-    if "carbon_tonnes" not in cols:
-        c.execute("ALTER TABLE projects ADD COLUMN carbon_tonnes REAL")
-        c.execute("UPDATE projects SET carbon_tonnes = COALESCE(carbon_tonnes, 0.0)")
-
-    if "credits" not in cols:
-        c.execute("ALTER TABLE projects ADD COLUMN credits REAL")
-        c.execute("UPDATE projects SET credits = COALESCE(credits, 0.0)")
-
-    if "status" not in cols:
-        c.execute("ALTER TABLE projects ADD COLUMN status TEXT")
-        c.execute("UPDATE projects SET status = COALESCE(status, 'Issued')")
-
-    if "created_at" not in cols:
-        c.execute("ALTER TABLE projects ADD COLUMN created_at TEXT")
-
-    if "carbon_explanation" not in cols:
-        c.execute("ALTER TABLE projects ADD COLUMN carbon_explanation TEXT")
-
-    conn.commit()
-
-ensure_projects_schema()
 
 # -------------------
-# Detect Schema
+# HELPER FUNCTIONS
 # -------------------
-def detect_schema():
-    c.execute("PRAGMA table_info(projects)")
-    cols = {row[1] for row in c.fetchall()}
-    id_col = "id" if "id" in cols else ("project_id" if "project_id" in cols else None)
-    area_col = "area_ha" if "area_ha" in cols else ("area" if "area" in cols else None)
-    carbon_col = "carbon_tonnes" if "carbon_tonnes" in cols else ("carbon" if "carbon" in cols else None)
-    return {"id_col": id_col, "area_col": area_col, "carbon_col": carbon_col}
 
-SCHEMA = detect_schema()
+def log_debug(msg):
+    """Print debug messages to console."""
+    print(f"[DEBUG] {datetime.now()} - {msg}")
 
-# -------------------
-# Helper Functions
-# -------------------
+
 def do_rerun():
+    """Rerun Streamlit app safely."""
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
@@ -87,113 +54,121 @@ def do_rerun():
         except Exception:
             pass
 
+
 def calculate_credits(area, carbon):
-    return round(area * 0.5 + carbon * 0.2, 2)
+    """Calculate carbon credits based on area and carbon stored."""
+    try:
+        return round(area * 0.5 + carbon * 0.2, 2)
+    except Exception as e:
+        log_debug(f"Error calculating credits: {e}")
+        return 0.0
+
+
+def predict_carbon_llm(area, project_type="", region=""):
+    """
+    Placeholder for LLM-based carbon prediction.
+    Currently returns area * 4 as default.
+    """
+    try:
+        predicted = area * 4.0
+        explanation = f"Predicted carbon based on area {area} ha: {predicted} tonnes."
+        return predicted, explanation
+    except Exception as e:
+        log_debug(f"Error in LLM prediction: {e}")
+        return 0.0, ""
+
 
 def add_project(name, type_, region, area, carbon, explanation=""):
+    """Add a new project to the database."""
     credits = calculate_credits(area, carbon)
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute('''
-        INSERT INTO projects (name, type, region, area_ha, carbon_tonnes, credits, status, created_at, carbon_explanation)
+        INSERT INTO projects (name, type, region, area_ha, carbon_tonnes, credits, status, created_at, explanation)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (name, type_, region, area, carbon, credits, "Issued", created_at, explanation))
     conn.commit()
+    log_debug(f"Added project: {name}, area: {area}, carbon: {carbon}")
+
 
 def delete_project(proj_id):
-    if not SCHEMA["id_col"]:
-        raise RuntimeError("Projects table has no identifiable primary key column.")
+    """Delete a project by ID."""
     try:
-        conn.execute("BEGIN")
-        c.execute(f'DELETE FROM projects WHERE {SCHEMA["id_col"]} = ?', (int(proj_id),))
-        if c.rowcount == 1:
-            conn.commit()
-        else:
-            conn.rollback()
-    except Exception:
-        conn.rollback()
-        raise
+        c.execute('DELETE FROM projects WHERE id = ?', (proj_id,))
+        conn.commit()
+        log_debug(f"Deleted project ID: {proj_id}")
+    except Exception as e:
+        log_debug(f"Error deleting project {proj_id}: {e}")
+
 
 def update_status(proj_id, status):
-    if not SCHEMA["id_col"]:
-        raise RuntimeError("Projects table has no identifiable primary key column.")
-    c.execute(f'UPDATE projects SET status=? WHERE {SCHEMA["id_col"]} = ?', (status, int(proj_id)))
-    conn.commit()
+    """Update project status."""
+    try:
+        c.execute('UPDATE projects SET status=? WHERE id = ?', (status, proj_id))
+        conn.commit()
+        log_debug(f"Updated project {proj_id} status to {status}")
+    except Exception as e:
+        log_debug(f"Error updating status for project {proj_id}: {e}")
+
 
 def get_all_projects():
-    id_col = SCHEMA["id_col"]
-    area_col = SCHEMA["area_col"] or "area_ha"
-    carbon_col = SCHEMA["carbon_col"] or "carbon_tonnes"
-    select_cols = [
-        f"{id_col} AS ID",
-        "name AS Name",
-        "type AS Type",
-        "region AS Region",
-        f"{area_col} AS Area_ha",
-        f"{carbon_col} AS Carbon_tonnes",
-        "credits AS Credits",
-        "status AS Status",
-        "created_at AS Created_at",
-        "carbon_explanation AS Explanation"
-    ]
-    query = "SELECT " + ", ".join(select_cols) + " FROM projects"
+    """Retrieve all projects as a DataFrame."""
     try:
-        c.execute(query)
+        c.execute('SELECT * FROM projects')
         data = c.fetchall()
+        columns = ['ID','Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at','Explanation']
         if data:
-            return pd.DataFrame(data, columns=['ID','Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at','Explanation'])
+            df = pd.DataFrame(data, columns=columns)
+            return df
         else:
-            return pd.DataFrame(columns=['ID','Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at','Explanation'])
-    except Exception:
+            return pd.DataFrame(columns=columns)
+    except Exception as e:
+        log_debug(f"Error fetching projects: {e}")
         return pd.DataFrame(columns=['ID','Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at','Explanation'])
 
-# -------------------
-# Dummy LLM Functions
-# -------------------
-def ask_llm(prompt):
-    return f"LLM Explanation: {prompt}"
-
-def ask_llm_number(prompt, fallback):
-    return fallback
 
 # -------------------
-# Admin Dashboard
+# ADMIN DASHBOARD
 # -------------------
+
 def admin_dashboard():
+    """Display the Admin dashboard with project management."""
     st.title("Admin Dashboard")
+
+    # Input method selection
     input_mode = st.radio("Choose Input Method", ["Manual Entry", "Bulk CSV Upload"])
 
-    # Manual Entry
+    # -------------------
+    # MANUAL ENTRY
+    # -------------------
     if input_mode == "Manual Entry":
         st.subheader("Add New Project")
-        with st.form("manual_project_form"):
-            name = st.text_input("Project Name")
-            type_ = st.text_input("Project Type")
-            region = st.text_input("Region")
-            area = st.number_input("Area (ha)", min_value=0.0)
-            carbon = st.number_input("Carbon Stored (tonnes)", min_value=0.0)
-            submitted = st.form_submit_button("Add Project")
 
-        if submitted:
+        name = st.text_input("Project Name")
+        type_ = st.text_input("Project Type")
+        region = st.text_input("Region")
+        area = st.number_input("Area (ha)", min_value=0.0)
+        carbon = st.number_input("Carbon Stored (tonnes)", min_value=0.0)
+
+        if st.button("Add Project"):
             if name and type_ and region and area > 0:
+                # Use LLM prediction if carbon not provided
                 if carbon == 0.0:
-                    fallback = area * 4.0
-                    prompt = f"Estimate carbon tonnes for a mangrove project with area {area} ha in India."
-                    with st.spinner("Estimating carbon with LLM..."):
-                        carbon = ask_llm_number(prompt, fallback)
-                    explanation_prompt = f"Explain why carbon for area {area} ha is {carbon} tonnes."
-                    with st.spinner("Generating explanation..."):
-                        explanation = ask_llm(explanation_prompt)
+                    carbon, explanation = predict_carbon_llm(area, type_, region)
                 else:
-                    explanation = ""
+                    explanation = f"Carbon manually entered: {carbon} tonnes."
                 add_project(name, type_, region, area, carbon, explanation)
                 st.success("Project added successfully!")
                 do_rerun()
             else:
                 st.error("Fill all required fields and make sure area > 0!")
 
-    # Bulk Upload
+    # -------------------
+    # BULK CSV UPLOAD
+    # -------------------
     elif input_mode == "Bulk CSV Upload":
-        st.subheader("Upload Multiple CSV Files")
+        st.subheader("Upload CSV Files")
+
+        # CSV template download
         template = pd.DataFrame({
             "name": ["Project A"],
             "type": ["Afforestation"],
@@ -206,18 +181,16 @@ def admin_dashboard():
         st.download_button("Download CSV Template", buffer.getvalue(), "template.csv", "text/csv")
 
         uploaded_files = st.file_uploader("Upload CSV files", type=["csv"], accept_multiple_files=True)
+        all_dfs = []
+
         if uploaded_files:
-            all_dfs = []
             for file in uploaded_files:
                 st.markdown(f"### 📂 {file.name}")
                 df = pd.read_csv(file)
                 st.dataframe(df.head())
                 all_dfs.append(df)
 
-            with st.form("bulk_upload_form"):
-                submitted = st.form_submit_button("Add All Projects")
-
-            if submitted:
+            if st.button("Add All Projects"):
                 for df in all_dfs:
                     for _, row in df.iterrows():
                         try:
@@ -226,19 +199,16 @@ def admin_dashboard():
                             region = row["region"]
                             area = row.get("area_ha")
                             carbon = row.get("carbon_tonnes")
+
                             if pd.isna(area) or area <= 0:
-                                st.warning(f"Skipping '{name}' due to missing area")
+                                st.warning(f"Skipping row '{name}' because area is missing or zero!")
                                 continue
+
                             if pd.isna(carbon):
-                                fallback = float(area) * 4.0
-                                prompt = f"Estimate carbon tonnes for a mangrove project with area {area} ha in India."
-                                with st.spinner(f"Estimating carbon for {name}..."):
-                                    carbon = ask_llm_number(prompt, fallback)
-                                explanation_prompt = f"Explain why carbon for area {area} ha is {carbon} tonnes."
-                                with st.spinner(f"Generating explanation for {name}..."):
-                                    explanation = ask_llm(explanation_prompt)
+                                carbon, explanation = predict_carbon_llm(area, type_, region)
                             else:
-                                explanation = ""
+                                explanation = f"Carbon manually entered: {carbon} tonnes."
+
                             add_project(name, type_, region, float(area), float(carbon), explanation)
                         except Exception as e:
                             st.warning(f"Skipping row due to error: {e}")
@@ -246,29 +216,49 @@ def admin_dashboard():
                 do_rerun()
 
     # -------------------
-    # Projects Overview
+    # PROJECTS TABLE
     # -------------------
     st.subheader("Projects Overview")
     df = get_all_projects()
     if not df.empty:
-        display_df = df[['Name', 'Type', 'Region', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Status', 'Created_at']].copy()
+        display_df = df[['Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at']]
         st.dataframe(display_df, use_container_width=True)
+
+        st.subheader("Manage Projects")
         for _, row in df.iterrows():
-            if row['Explanation']:
-                with st.expander(f"ℹ️ Explanation for {row['Name']}"):
-                    st.write(row['Explanation'])
-    else:
-        st.info("No projects yet!")
+            col1, col2, col3, col4 = st.columns([1,1,1,1])
+            with col1:
+                if st.button(f"Delete {row['ID']}", key=f"del_{row['ID']}"):
+                    delete_project(row['ID'])
+                    do_rerun()
+            with col2:
+                if st.button(f"Retire {row['ID']}", key=f"ret_{row['ID']}"):
+                    update_status(row['ID'], "Retired")
+                    do_rerun()
+            with col3:
+                if st.button(f"Issue {row['ID']}", key=f"iss_{row['ID']}"):
+                    update_status(row['ID'], "Issued")
+                    do_rerun()
+            with col4:
+                if row['Explanation']:
+                    with st.expander(f"ℹ️ Explanation for {row['Name']}"):
+                        st.write(row['Explanation'])
+
 
 # -------------------
-# Public Dashboard
+# PUBLIC DASHBOARD
 # -------------------
+
 def public_dashboard():
+    """Display the public view of projects."""
     st.title("Public Registry")
     df = get_all_projects()
+
     if not df.empty:
-        display_df = df[['Name', 'Type', 'Region', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Status', 'Created_at']].copy()
+        display_df = df[['Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at']]
         st.dataframe(display_df, use_container_width=True)
+
+        # ℹ️ Explanations for public
         for _, row in df.iterrows():
             if row['Explanation']:
                 with st.expander(f"ℹ️ Explanation for {row['Name']}"):
@@ -276,23 +266,27 @@ def public_dashboard():
     else:
         st.info("No projects available.")
 
+
 # -------------------
-# Main App
+# MAIN APP
 # -------------------
+
 def main():
     st.sidebar.title("Carbon Registry")
     mode = st.sidebar.selectbox("Select Mode", ["Public", "Admin"])
     if mode == "Admin":
         password = st.sidebar.text_input("Enter Admin Password", type="password")
-        if password == "admin123":
+        if password == "admin123":  # change in production
             admin_dashboard()
         elif password:
             st.sidebar.error("Wrong password!")
     else:
         public_dashboard()
 
+
 # -------------------
-# Run App
+# RUN APP
 # -------------------
+
 if __name__ == "__main__":
     main()
