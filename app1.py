@@ -194,6 +194,9 @@ def get_all_projects():
 # -------------------
 # Admin Dashboard
 # -------------------
+# -------------------
+# Admin Dashboard
+# -------------------
 def admin_dashboard():
     st.title("Admin Dashboard")
 
@@ -203,28 +206,37 @@ def admin_dashboard():
     if input_mode == "Manual Entry":
         st.subheader("Add New Project")
 
+        # Input fields
         name = st.text_input("Project Name")
         type_ = st.text_input("Project Type")
         region = st.text_input("Region")
         area = st.number_input("Area (ha)", min_value=0.0)
         carbon = st.number_input("Carbon Stored (tonnes)", min_value=0.0)
 
+        # Initialize session state to avoid re-running LLM
+        if "carbon_estimate" not in st.session_state:
+            st.session_state.carbon_estimate = 0.0
+        if "carbon_explanation" not in st.session_state:
+            st.session_state.carbon_explanation = ""
+
         if st.button("Add Project"):
             if name and type_ and region and area > 0:
-                # -------------------
-                # LLM estimates missing carbon safely
-                # -------------------
+                # Only call LLM if carbon missing
                 if carbon == 0.0:
                     fallback = area * 4.0
                     prompt = f"Estimate carbon tonnes for a mangrove project with area {area} ha in India. Suggest a reasonable range if uncertain."
-                    carbon = ask_llm_number(prompt, fallback)
+                    with st.spinner("Estimating carbon with LLM..."):
+                        st.session_state.carbon_estimate = ask_llm_number(prompt, fallback)
+                    carbon = st.session_state.carbon_estimate
 
+                # Add project to DB
                 add_project(name, type_, region, area, carbon)
 
                 # Optional explanation
                 explanation_prompt = f"Explain why a mangrove project with area {area} ha has carbon storage of {carbon} tonnes."
-                explanation = ask_llm(explanation_prompt)
-                st.info(explanation)
+                with st.spinner("Generating explanation..."):
+                    st.session_state.carbon_explanation = ask_llm(explanation_prompt)
+                st.info(st.session_state.carbon_explanation)
 
                 st.success("Project added successfully!")
                 do_rerun()
@@ -235,6 +247,7 @@ def admin_dashboard():
     elif input_mode == "Bulk CSV Upload":
         st.subheader("Upload Multiple CSV Files")
 
+        # CSV Template download
         template = pd.DataFrame({
             "name": ["Project A"],
             "type": ["Afforestation"],
@@ -272,10 +285,12 @@ def admin_dashboard():
                                 st.warning(f"Skipping row '{name}' because area is missing or zero!")
                                 continue
 
+                            # Only call LLM if carbon missing
                             if pd.isna(carbon):
                                 fallback = float(area) * 4.0
                                 prompt = f"Estimate carbon tonnes for a mangrove project with area {area} ha in India. Suggest a reasonable range if uncertain."
-                                carbon = ask_llm_number(prompt, fallback)
+                                with st.spinner(f"Estimating carbon for {name}..."):
+                                    carbon = ask_llm_number(prompt, fallback)
 
                             add_project(name, type_, region, float(area), float(carbon))
 
@@ -308,6 +323,7 @@ def admin_dashboard():
     else:
         st.info("No projects yet!")
 
+
 # -------------------
 # Public Dashboard
 # -------------------
@@ -337,3 +353,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
