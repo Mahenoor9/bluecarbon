@@ -12,11 +12,7 @@ conn = sqlite3.connect("registry.db", check_same_thread=False)
 c = conn.cursor()
 c.execute("PRAGMA foreign_keys = ON")
 
-# Drop old table to ensure fresh start
-c.execute('DROP TABLE IF EXISTS projects')
-conn.commit()
-
-# Create new projects table with all necessary columns
+# Create new projects table with all necessary columns if it doesn't exist
 c.execute('''
 CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,6 +28,7 @@ CREATE TABLE IF NOT EXISTS projects (
 )
 ''')
 conn.commit()
+
 
 # -------------------
 # HELPER FUNCTIONS
@@ -302,3 +299,4 @@ def main():
 # -------------------
 if __name__ == "__main__":
     main()
+
