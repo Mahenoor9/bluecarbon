@@ -7,15 +7,16 @@ import io
 # -------------------
 # DATABASE SETUP
 # -------------------
-
 # Connect to SQLite database
 conn = sqlite3.connect("registry.db", check_same_thread=False)
 c = conn.cursor()
-
-# Ensure foreign key support
 c.execute("PRAGMA foreign_keys = ON")
 
-# Create projects table if it does not exist
+# Drop old table to ensure fresh start
+c.execute('DROP TABLE IF EXISTS projects')
+conn.commit()
+
+# Create new projects table with all necessary columns
 c.execute('''
 CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,142 +33,145 @@ CREATE TABLE IF NOT EXISTS projects (
 ''')
 conn.commit()
 
-
 # -------------------
 # HELPER FUNCTIONS
 # -------------------
 
-def log_debug(msg):
-    """Print debug messages to console."""
-    print(f"[DEBUG] {datetime.now()} - {msg}")
+def calculate_credits(area, carbon):
+    """
+    Calculate carbon credits based on area and carbon.
+    Formula: credits = area * 0.5 + carbon * 0.2
+    Args:
+        area (float): Project area in hectares
+        carbon (float): Carbon stored in tonnes
+    Returns:
+        float: Calculated carbon credits
+    """
+    return round(area * 0.5 + carbon * 0.2, 2)
 
+def predict_carbon_llm(area):
+    """
+    Placeholder function for LLM prediction of carbon.
+    Args:
+        area (float): Project area in hectares
+    Returns:
+        carbon_estimate (float): Estimated carbon
+        explanation (str): Explanation string for LLM prediction
+    """
+    carbon_estimate = area * 4.0
+    explanation = f"Carbon estimated as {area} ha * 4.0 tCO₂/ha"
+    return carbon_estimate, explanation
+
+def add_project(name, type_, region, area, carbon, explanation=""):
+    """
+    Add a new project to the database.
+    Calculates credits automatically.
+    Args:
+        name (str): Project name
+        type_ (str): Project type
+        region (str): Region name
+        area (float): Area in hectares
+        carbon (float): Carbon stored in tonnes
+        explanation (str): Explanation of how carbon was determined
+    """
+    credits = calculate_credits(area, carbon)
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute('''
+        INSERT INTO projects 
+        (name, type, region, area_ha, carbon_tonnes, credits, status, created_at, explanation)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (name, type_, region, area, carbon, credits, "Issued", created_at, explanation))
+    conn.commit()
+
+def delete_project(proj_id):
+    """
+    Delete a project from the database using its ID.
+    Args:
+        proj_id (int): Project ID
+    """
+    c.execute('DELETE FROM projects WHERE id=?', (proj_id,))
+    conn.commit()
+
+def update_status(proj_id, status):
+    """
+    Update the status of a project.
+    Args:
+        proj_id (int): Project ID
+        status (str): New status (e.g., "Retired", "Issued")
+    """
+    c.execute('UPDATE projects SET status=? WHERE id=?', (status, proj_id))
+    conn.commit()
+
+def get_all_projects():
+    """
+    Retrieve all projects from the database.
+    Returns:
+        pd.DataFrame: Dataframe containing all projects
+    """
+    c.execute("SELECT * FROM projects")
+    data = c.fetchall()
+    columns = ['ID','Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at','Explanation']
+    df = pd.DataFrame(data, columns=columns)
+    return df
 
 def do_rerun():
-    """Rerun Streamlit app safely."""
+    """
+    Force Streamlit to rerun the app.
+    Handles multiple Streamlit versions.
+    """
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
     else:
-        try:
-            st.experimental_set_query_params(_=datetime.now().timestamp())
-        except Exception:
-            pass
-
-
-def calculate_credits(area, carbon):
-    """Calculate carbon credits based on area and carbon stored."""
-    try:
-        return round(area * 0.5 + carbon * 0.2, 2)
-    except Exception as e:
-        log_debug(f"Error calculating credits: {e}")
-        return 0.0
-
-
-def predict_carbon_llm(area, project_type="", region=""):
-    """
-    Placeholder for LLM-based carbon prediction.
-    Currently returns area * 4 as default.
-    """
-    try:
-        predicted = area * 4.0
-        explanation = f"Predicted carbon based on area {area} ha: {predicted} tonnes."
-        return predicted, explanation
-    except Exception as e:
-        log_debug(f"Error in LLM prediction: {e}")
-        return 0.0, ""
-
-
-def add_project(name, type_, region, area, carbon, explanation=""):
-    """Add a new project to the database."""
-    credits = calculate_credits(area, carbon)
-    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''
-        INSERT INTO projects (name, type, region, area_ha, carbon_tonnes, credits, status, created_at, explanation)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (name, type_, region, area, carbon, credits, "Issued", created_at, explanation))
-    conn.commit()
-    log_debug(f"Added project: {name}, area: {area}, carbon: {carbon}")
-
-
-def delete_project(proj_id):
-    """Delete a project by ID."""
-    try:
-        c.execute('DELETE FROM projects WHERE id = ?', (proj_id,))
-        conn.commit()
-        log_debug(f"Deleted project ID: {proj_id}")
-    except Exception as e:
-        log_debug(f"Error deleting project {proj_id}: {e}")
-
-
-def update_status(proj_id, status):
-    """Update project status."""
-    try:
-        c.execute('UPDATE projects SET status=? WHERE id = ?', (status, proj_id))
-        conn.commit()
-        log_debug(f"Updated project {proj_id} status to {status}")
-    except Exception as e:
-        log_debug(f"Error updating status for project {proj_id}: {e}")
-
-
-def get_all_projects():
-    """Retrieve all projects as a DataFrame."""
-    try:
-        c.execute('SELECT * FROM projects')
-        data = c.fetchall()
-        columns = ['ID','Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at','Explanation']
-        if data:
-            df = pd.DataFrame(data, columns=columns)
-            return df
-        else:
-            return pd.DataFrame(columns=columns)
-    except Exception as e:
-        log_debug(f"Error fetching projects: {e}")
-        return pd.DataFrame(columns=['ID','Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at','Explanation'])
-
+        st.experimental_set_query_params(_=datetime.now().timestamp())
 
 # -------------------
 # ADMIN DASHBOARD
 # -------------------
 
 def admin_dashboard():
-    """Display the Admin dashboard with project management."""
+    """
+    Admin dashboard to manage projects.
+    Includes manual entry and CSV bulk upload.
+    Displays project table and controls.
+    """
     st.title("Admin Dashboard")
-
-    # Input method selection
+    
+    # Select input mode
     input_mode = st.radio("Choose Input Method", ["Manual Entry", "Bulk CSV Upload"])
-
+    
     # -------------------
     # MANUAL ENTRY
     # -------------------
     if input_mode == "Manual Entry":
         st.subheader("Add New Project")
-
+        
         name = st.text_input("Project Name")
         type_ = st.text_input("Project Type")
         region = st.text_input("Region")
         area = st.number_input("Area (ha)", min_value=0.0)
         carbon = st.number_input("Carbon Stored (tonnes)", min_value=0.0)
-
+        
         if st.button("Add Project"):
             if name and type_ and region and area > 0:
-                # Use LLM prediction if carbon not provided
                 if carbon == 0.0:
-                    carbon, explanation = predict_carbon_llm(area, type_, region)
+                    carbon, explanation = predict_carbon_llm(area)
                 else:
-                    explanation = f"Carbon manually entered: {carbon} tonnes."
+                    explanation = ""
+                
                 add_project(name, type_, region, area, carbon, explanation)
                 st.success("Project added successfully!")
                 do_rerun()
             else:
-                st.error("Fill all required fields and make sure area > 0!")
+                st.error("Please fill all required fields and make sure area > 0!")
 
     # -------------------
     # BULK CSV UPLOAD
     # -------------------
     elif input_mode == "Bulk CSV Upload":
         st.subheader("Upload CSV Files")
-
+        
         # CSV template download
         template = pd.DataFrame({
             "name": ["Project A"],
@@ -179,54 +183,63 @@ def admin_dashboard():
         buffer = io.BytesIO()
         template.to_csv(buffer, index=False)
         st.download_button("Download CSV Template", buffer.getvalue(), "template.csv", "text/csv")
-
+        
+        # File uploader
         uploaded_files = st.file_uploader("Upload CSV files", type=["csv"], accept_multiple_files=True)
         all_dfs = []
-
         if uploaded_files:
             for file in uploaded_files:
                 st.markdown(f"### 📂 {file.name}")
                 df = pd.read_csv(file)
                 st.dataframe(df.head())
                 all_dfs.append(df)
-
+            
             if st.button("Add All Projects"):
                 for df in all_dfs:
                     for _, row in df.iterrows():
-                        try:
-                            name = row["name"]
-                            type_ = row["type"]
-                            region = row["region"]
-                            area = row.get("area_ha")
-                            carbon = row.get("carbon_tonnes")
-
-                            if pd.isna(area) or area <= 0:
-                                st.warning(f"Skipping row '{name}' because area is missing or zero!")
-                                continue
-
-                            if pd.isna(carbon):
-                                carbon, explanation = predict_carbon_llm(area, type_, region)
-                            else:
-                                explanation = f"Carbon manually entered: {carbon} tonnes."
-
-                            add_project(name, type_, region, float(area), float(carbon), explanation)
-                        except Exception as e:
-                            st.warning(f"Skipping row due to error: {e}")
+                        name = row.get("name")
+                        type_ = row.get("type")
+                        region = row.get("region")
+                        area = row.get("area_ha")
+                        carbon = row.get("carbon_tonnes")
+                        
+                        # Skip invalid rows
+                        if pd.isna(area) or area <= 0:
+                            st.warning(f"Skipping row '{name}': missing area")
+                            continue
+                        
+                        if pd.isna(carbon):
+                            carbon, explanation = predict_carbon_llm(area)
+                        else:
+                            explanation = ""
+                        
+                        add_project(name, type_, region, float(area), float(carbon), explanation)
+                
                 st.success("All uploaded projects imported successfully!")
                 do_rerun()
-
+    
     # -------------------
     # PROJECTS TABLE
     # -------------------
     st.subheader("Projects Overview")
     df = get_all_projects()
+    
     if not df.empty:
-        display_df = df[['Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at']]
-        st.dataframe(display_df, use_container_width=True)
-
-        st.subheader("Manage Projects")
+        # Display table with explanations in expanders
+        for i, row in df.iterrows():
+            cols = st.columns([3,1])
+            with cols[0]:
+                st.markdown(f"**{row['Name']}** - Carbon: {row['Carbon_tonnes']} tonnes")
+            with cols[1]:
+                with st.expander("ℹ️ Explanation"):
+                    if row['Explanation']:
+                        st.write(row['Explanation'])
+                    else:
+                        st.write("No explanation available")
+        
+        # Manage project buttons
         for _, row in df.iterrows():
-            col1, col2, col3, col4 = st.columns([1,1,1,1])
+            col1, col2, col3 = st.columns(3)
             with col1:
                 if st.button(f"Delete {row['ID']}", key=f"del_{row['ID']}"):
                     delete_project(row['ID'])
@@ -239,33 +252,33 @@ def admin_dashboard():
                 if st.button(f"Issue {row['ID']}", key=f"iss_{row['ID']}"):
                     update_status(row['ID'], "Issued")
                     do_rerun()
-            with col4:
-                if row['Explanation']:
-                    with st.expander(f"ℹ️ Explanation for {row['Name']}"):
-                        st.write(row['Explanation'])
-
+    else:
+        st.info("No projects yet!")
 
 # -------------------
 # PUBLIC DASHBOARD
 # -------------------
 
 def public_dashboard():
-    """Display the public view of projects."""
+    """
+    Public dashboard to view all projects.
+    Includes explanations in expanders.
+    """
     st.title("Public Registry")
     df = get_all_projects()
-
+    
     if not df.empty:
-        display_df = df[['Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at']]
-        st.dataframe(display_df, use_container_width=True)
-
-        # ℹ️ Explanations for public
-        for _, row in df.iterrows():
-            if row['Explanation']:
-                with st.expander(f"ℹ️ Explanation for {row['Name']}"):
+        st.dataframe(df[['Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status']])
+        
+        # Show explanations for each project
+        for i, row in df.iterrows():
+            with st.expander(f"{row['Name']} - ℹ️ Explanation"):
+                if row['Explanation']:
                     st.write(row['Explanation'])
+                else:
+                    st.write("No explanation available")
     else:
         st.info("No projects available.")
-
 
 # -------------------
 # MAIN APP
@@ -274,19 +287,18 @@ def public_dashboard():
 def main():
     st.sidebar.title("Carbon Registry")
     mode = st.sidebar.selectbox("Select Mode", ["Public", "Admin"])
+    
     if mode == "Admin":
         password = st.sidebar.text_input("Enter Admin Password", type="password")
-        if password == "admin123":  # change in production
+        if password == "admin123":
             admin_dashboard()
         elif password:
             st.sidebar.error("Wrong password!")
     else:
         public_dashboard()
 
-
 # -------------------
 # RUN APP
 # -------------------
-
 if __name__ == "__main__":
     main()
