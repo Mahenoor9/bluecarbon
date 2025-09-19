@@ -11,7 +11,6 @@ conn = sqlite3.connect("registry.db", check_same_thread=False)
 c = conn.cursor()
 c.execute("PRAGMA foreign_keys = ON")
 
-# Create table if not exists
 c.execute('''
 CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +58,8 @@ def ensure_projects_schema():
 
     conn.commit()
 
+ensure_projects_schema()
+
 # -------------------
 # Detect Schema
 # -------------------
@@ -70,8 +71,6 @@ def detect_schema():
     carbon_col = "carbon_tonnes" if "carbon_tonnes" in cols else ("carbon" if "carbon" in cols else None)
     return {"id_col": id_col, "area_col": area_col, "carbon_col": carbon_col}
 
-# Initialize schema
-ensure_projects_schema()
 SCHEMA = detect_schema()
 
 # -------------------
@@ -246,30 +245,18 @@ def admin_dashboard():
                 st.success("All uploaded projects imported successfully!")
                 do_rerun()
 
+    # -------------------
     # Projects Overview
+    # -------------------
     st.subheader("Projects Overview")
     df = get_all_projects()
     if not df.empty:
+        display_df = df[['Name', 'Type', 'Region', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Status', 'Created_at']].copy()
+        st.dataframe(display_df, use_container_width=True)
         for _, row in df.iterrows():
-            st.write(f"**{row['Name']}** - Carbon: {row['Carbon_tonnes']} tonnes", end="")
             if row['Explanation']:
-                if st.button("ℹ️", key=f"info_admin_{row['ID']}"):
-                    with st.expander("LLM Explanation"):
-                        st.write(row['Explanation'])
-
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if st.button(f"Delete {row['ID']}", key=f"del_{row['ID']}"):
-                    delete_project(int(row['ID']))
-                    do_rerun()
-            with col2:
-                if st.button(f"Retire {row['ID']}", key=f"ret_{row['ID']}"):
-                    update_status(int(row['ID']), "Retired")
-                    do_rerun()
-            with col3:
-                if st.button(f"Issue {row['ID']}", key=f"iss_{row['ID']}"):
-                    update_status(int(row['ID']), "Issued")
-                    do_rerun()
+                with st.expander(f"ℹ️ Explanation for {row['Name']}"):
+                    st.write(row['Explanation'])
     else:
         st.info("No projects yet!")
 
@@ -280,12 +267,12 @@ def public_dashboard():
     st.title("Public Registry")
     df = get_all_projects()
     if not df.empty:
+        display_df = df[['Name', 'Type', 'Region', 'Area_ha', 'Carbon_tonnes', 'Credits', 'Status', 'Created_at']].copy()
+        st.dataframe(display_df, use_container_width=True)
         for _, row in df.iterrows():
-            st.write(f"**{row['Name']}** - Carbon: {row['Carbon_tonnes']} tonnes", end="")
             if row['Explanation']:
-                if st.button("ℹ️", key=f"info_public_{row['ID']}"):
-                    with st.expander("LLM Explanation"):
-                        st.write(row['Explanation'])
+                with st.expander(f"ℹ️ Explanation for {row['Name']}"):
+                    st.write(row['Explanation'])
     else:
         st.info("No projects available.")
 
