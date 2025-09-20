@@ -1,133 +1,92 @@
+# app.py
 import streamlit as st
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime
 import pandas as pd
 import io
 import requests
+import json
+import time
 
-# -----------------------------
-# DATABASE SETUP
-# -----------------------------
-# Connect to SQLite database
-conn = sqlite3.connect("registry.db", check_same_thread=False)
-c = conn.cursor()
-c.execute("PRAGMA foreign_keys = ON")
-
-# Create projects table if it doesn't exist
-c.execute('''
-CREATE TABLE IF NOT EXISTS projects (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    type TEXT,
-    region TEXT,
-    area_ha REAL,
-    carbon_tonnes REAL,
-    credits REAL,
-    status TEXT,
-    created_at TEXT,
-    explanation TEXT
+# -------------------
+# SUPABASE POSTGRES CONNECTION
+# -------------------
+conn = psycopg2.connect(
+    host="db.hrrmqkjxxyumemtowloy.supabase.co",
+    port=5432,
+    database="postgres",
+    user="postgres",
+    password="mahenoor123",
+    cursor_factory=RealDictCursor
 )
-''')
-conn.commit()
+c = conn.cursor()
 
-# -----------------------------
-# PHI-3 MINI CONFIGURATION
-# -----------------------------
-REPLICATE_API_TOKEN = "YOUR_REPLICATE_API_TOKEN_HERE"
-MODEL_VERSION = "YOUR_MODEL_VERSION_HERE"
+# -------------------
+# PHI-3 MINI 128K SETTINGS
+# -------------------
+REPLICATE_API_TOKEN = "r8_GjvA1Mx65FbeviXgS9a7PdW2LA61s6n1euV5J"
+MODEL_VERSION_128K = "45ba1bd0a3cf3d5254becd00d937c4ba0c01b13fa1830818f483a76aa844205e"
 ENDPOINT = "https://api.replicate.com/v1/predictions"
 HEADERS = {
     "Authorization": f"Token {REPLICATE_API_TOKEN}",
-    "Content-Type": "application/json",
+    "Content-Type": "application/json"
 }
 
-# -----------------------------
+# -------------------
+# CACHING DICTIONARY
+# -------------------
+phi3_cache = {}  # key: (area, type, region), value: (carbon, explanation)
+
+# -------------------
 # HELPER FUNCTIONS
-# -----------------------------
+# -------------------
 
 def calculate_credits(area, carbon):
     """
-    Calculate carbon credits for a project.
+    Calculate carbon credits based on area and carbon.
     Formula: credits = area * 0.5 + carbon * 0.2
+    Returns rounded float.
     """
-    credits = area * 0.5 + carbon * 0.2
-    return round(credits, 2)
+    return round(area * 0.5 + carbon * 0.2, 2)
 
-@st.cache_data
-def predict_carbon_llm(area, project_type="Unknown", region="Unknown"):
+def predict_carbon_phi3_128k(area, project_type="Afforestation", region="India"):
     """
-    Calls Phi-3 Mini LLM to predict carbon stored for a project.
-    Returns carbon_estimate and detailed explanation.
+    Call Phi-3 Mini 128K to estimate carbon for a project.
+    Returns (carbon_estimate, explanation)
+    Uses caching to prevent repeated API calls.
     """
-    prompt = f"Estimate carbon stored (in tonnes) for a {area} hectare {project_type} project in {region}. Provide numeric estimate and explanation."
+    cache_key = (area, project_type, region)
+    if cache_key in phi3_cache:
+        return phi3_cache[cache_key]
+
+    prompt = f"Estimate carbon stored (tonnes) for a {area} ha {project_type} project in {region}. Provide numeric value and explanation."
     data = {
-        "version": MODEL_VERSION,
+        "version": MODEL_VERSION_128K,
         "input": {
             "messages": [
-                {"role": "system", "content": "You are a climate scientist and carbon accounting expert."},
+                {"role": "system", "content": "You are a climate scientist."},
                 {"role": "user", "content": prompt}
             ]
         }
     }
     try:
-        response = requests.post(ENDPOINT, headers=HEADERS, json=data, timeout=30)
+        response = requests.post(ENDPOINT, headers=HEADERS, json=data, timeout=60)
         response.raise_for_status()
         result = response.json()
-        if "output" in result and len(result["output"]) > 0:
-            explanation = result["output"][0]["text"]
-            try:
-                carbon_estimate = float(explanation.split()[0])
-            except:
-                carbon_estimate = area * 4.0
-        else:
-            carbon_estimate = area * 4.0
-            explanation = f"Fallback: Carbon estimated as {area} ha * 4 tCO2/ha"
+        explanation_raw = str(result.get("output")[0])
+        # Extract numeric value for carbon
+        carbon_estimate = float([word for word in explanation_raw.split() if word.replace('.','',1).isdigit()][0])
+        explanation = explanation_raw
     except Exception as e:
         carbon_estimate = area * 4.0
-        explanation = f"Fallback due to API error: {str(e)} | Carbon estimated as {area} ha * 4 tCO2/ha"
+        explanation = f"Fallback due to API error: {e}, estimated carbon {carbon_estimate} tCO2"
+
+    phi3_cache[cache_key] = (carbon_estimate, explanation)
     return carbon_estimate, explanation
 
-def add_project(name, type_, region, area, carbon, explanation=""):
-    """
-    Adds a new project to the SQLite database.
-    """
-    credits = calculate_credits(area, carbon)
-    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''
-        INSERT INTO projects
-        (name, type, region, area_ha, carbon_tonnes, credits, status, created_at, explanation)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (name, type_, region, area, carbon, credits, "Issued", created_at, explanation))
-    conn.commit()
-
-def delete_project(proj_id):
-    """
-    Deletes a project by its ID from the database.
-    """
-    c.execute('DELETE FROM projects WHERE id=?', (proj_id,))
-    conn.commit()
-
-def update_status(proj_id, status):
-    """
-    Updates a project's status (Issued or Retired).
-    """
-    c.execute('UPDATE projects SET status=? WHERE id=?', (status, proj_id))
-    conn.commit()
-
-def get_all_projects():
-    """
-    Returns all projects as a Pandas DataFrame.
-    """
-    c.execute("SELECT * FROM projects")
-    data = c.fetchall()
-    columns = ['ID','Name','Type','Region','Area_ha','Carbon_tonnes','Credits','Status','Created_at','Explanation']
-    df = pd.DataFrame(data, columns=columns)
-    return df
-
 def do_rerun():
-    """
-    Forces Streamlit to rerun the app.
-    """
+    """Force Streamlit to rerun app."""
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
@@ -135,60 +94,70 @@ def do_rerun():
     else:
         st.experimental_set_query_params(_=datetime.now().timestamp())
 
-# -----------------------------
-# FILTERING FUNCTIONS
-# -----------------------------
+def validate_project_data(name, type_, region, area):
+    """Validate input data for a project."""
+    if not name or not type_ or not region:
+        return False
+    if area <= 0:
+        return False
+    return True
 
-def filter_projects(df, type_filter=None, region_filter=None, status_filter=None):
-    """
-    Filters projects by type, region, and status.
-    """
-    filtered = df.copy()
-    if type_filter and type_filter != "All":
-        filtered = filtered[filtered['Type'] == type_filter]
-    if region_filter and region_filter != "All":
-        filtered = filtered[filtered['Region'] == region_filter]
-    if status_filter and status_filter != "All":
-        filtered = filtered[filtered['Status'] == status_filter]
-    return filtered
+def create_csv_template():
+    """Create a CSV template for bulk upload."""
+    template = pd.DataFrame({
+        "name": ["Project A"],
+        "type": ["Afforestation"],
+        "region": ["India"],
+        "area_ha": [100],
+        "carbon_tonnes": [400]
+    })
+    buffer = io.BytesIO()
+    template.to_csv(buffer, index=False)
+    return buffer
 
-# -----------------------------
+# -------------------
+# DATABASE FUNCTIONS
+# -------------------
+
+def add_project(name, type_, region, area, carbon, explanation=""):
+    """Insert new project into Supabase Postgres."""
+    credits = calculate_credits(area, carbon)
+    c.execute("""
+        INSERT INTO projects (name, type, region, area_ha, carbon_tonnes, credits, status, created_at, explanation)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+    """, (name, type_, region, area, carbon, credits, "Issued", explanation))
+    conn.commit()
+
+def delete_project(proj_id):
+    """Delete project by ID"""
+    c.execute("DELETE FROM projects WHERE id=%s", (proj_id,))
+    conn.commit()
+
+def update_status(proj_id, status):
+    """Update project status (Issued/Retired)"""
+    c.execute("UPDATE projects SET status=%s WHERE id=%s", (status, proj_id))
+    conn.commit()
+
+def get_all_projects():
+    """Retrieve all projects from DB as DataFrame"""
+    c.execute("SELECT * FROM projects ORDER BY id DESC;")
+    rows = c.fetchall()
+    if rows:
+        return pd.DataFrame(rows)
+    else:
+        return pd.DataFrame(columns=['id','name','type','region','area_ha','carbon_tonnes','credits','status','created_at','explanation'])
+
+# -------------------
 # ADMIN DASHBOARD
-# -----------------------------
-def admin_dashboard():
-    st.title("Admin Dashboard")
-    
-    # -----------------------------
-    # FILTERS
-    # -----------------------------
-    df_all = get_all_projects()
-    types = ["All"] + sorted(df_all['Type'].dropna().unique().tolist())
-    regions = ["All"] + sorted(df_all['Region'].dropna().unique().tolist())
-    statuses = ["All"] + ["Issued","Retired"]
-    
-    st.subheader("Filter Projects")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        type_filter = st.selectbox("Filter by Type", types)
-    with col2:
-        region_filter = st.selectbox("Filter by Region", regions)
-    with col3:
-        status_filter = st.selectbox("Filter by Status", statuses)
-    
-    df_filtered = filter_projects(df_all, type_filter, region_filter, status_filter)
-    
-    st.write(f"Total projects: {len(df_filtered)}")
-    st.write(f"Total carbon (tonnes): {df_filtered['Carbon_tonnes'].sum()}")
-    st.write(f"Total credits: {df_filtered['Credits'].sum()}")
+# -------------------
 
-    # -----------------------------
-    # INPUT MODE
-    # -----------------------------
+def admin_dashboard():
+    """Admin dashboard for managing projects."""
+    st.title("Admin Dashboard")
+    st.markdown("---")
     input_mode = st.radio("Choose Input Method", ["Manual Entry", "Bulk CSV Upload"])
     
-    # -----------------------------
-    # MANUAL ENTRY
-    # -----------------------------
+    # Manual Entry
     if input_mode == "Manual Entry":
         st.subheader("Add New Project")
         name = st.text_input("Project Name")
@@ -196,36 +165,25 @@ def admin_dashboard():
         region = st.text_input("Region")
         area = st.number_input("Area (ha)", min_value=0.0)
         carbon = st.number_input("Carbon Stored (tonnes)", min_value=0.0)
-        
+        st.write("Leave carbon as 0 to auto-predict using Phi-3 Mini")
+
         if st.button("Add Project"):
-            if name and type_ and region and area > 0:
+            if validate_project_data(name, type_, region, area):
                 if carbon == 0.0:
-                    carbon, explanation = predict_carbon_llm(area, type_, region)
+                    carbon, explanation = predict_carbon_phi3_128k(area, type_, region)
                 else:
                     explanation = ""
                 add_project(name, type_, region, area, carbon, explanation)
                 st.success("Project added successfully!")
                 do_rerun()
             else:
-                st.error("Please fill all required fields and ensure area > 0!")
+                st.error("Please fill all fields and make sure area > 0!")
 
-    # -----------------------------
-    # BULK CSV UPLOAD
-    # -----------------------------
+    # Bulk CSV Upload
     elif input_mode == "Bulk CSV Upload":
         st.subheader("Upload CSV Files")
-        # CSV Template
-        template = pd.DataFrame({
-            "name": ["Project A"],
-            "type": ["Afforestation"],
-            "region": ["India"],
-            "area_ha": [100],
-            "carbon_tonnes": [400]
-        })
-        buffer = io.BytesIO()
-        template.to_csv(buffer, index=False)
+        buffer = create_csv_template()
         st.download_button("Download CSV Template", buffer.getvalue(), "template.csv", "text/csv")
-        
         uploaded_files = st.file_uploader("Upload CSV files", type=["csv"], accept_multiple_files=True)
         all_dfs = []
         if uploaded_files:
@@ -236,96 +194,71 @@ def admin_dashboard():
                 all_dfs.append(df)
             if st.button("Add All Projects"):
                 for df in all_dfs:
-                    for idx, row in df.iterrows():
+                    for _, row in df.iterrows():
                         name = row.get("name")
                         type_ = row.get("type")
                         region = row.get("region")
                         area = row.get("area_ha")
                         carbon = row.get("carbon_tonnes")
                         if pd.isna(area) or area <= 0:
-                            st.warning(f"Skipping row '{name}' ({idx}): missing or invalid area")
+                            st.warning(f"Skipping row '{name}': missing area")
                             continue
                         if pd.isna(carbon):
-                            carbon, explanation = predict_carbon_llm(area, type_, region)
+                            carbon, explanation = predict_carbon_phi3_128k(area, type_, region)
                         else:
                             explanation = ""
                         add_project(name, type_, region, float(area), float(carbon), explanation)
                 st.success("All uploaded projects imported successfully!")
                 do_rerun()
-    
-    # -----------------------------
-    # PROJECT CARDS
-    # -----------------------------
-    st.subheader("Projects Overview")
-    if not df_filtered.empty:
-        for _, row in df_filtered.iterrows():
-            with st.expander(f"{row['Name']} ({row['Type']}, {row['Region']}) - Status: {row['Status']}"):
-                st.write(f"**Area (ha):** {row['Area_ha']}")
-                st.write(f"**Carbon Stored (t):** {row['Carbon_tonnes']}")
-                st.write(f"**Credits:** {row['Credits']}")
-                st.write(f"**Created At:** {row['Created_at']}")
-                st.write(f"**Explanation:** {row['Explanation'] if row['Explanation'] else 'No explanation available'}")
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    if st.button(f"Delete {row['ID']}", key=f"del_{row['ID']}"):
-                        delete_project(row['ID'])
-                        do_rerun()
-                with col2:
-                    if st.button(f"Retire {row['ID']}", key=f"ret_{row['ID']}"):
-                        update_status(row['ID'], "Retired")
-                        do_rerun()
-                with col3:
-                    if st.button(f"Issue {row['ID']}", key=f"iss_{row['ID']}"):
-                        update_status(row['ID'], "Issued")
-                        do_rerun()
+
+    # Projects Table
+    st.markdown("## Projects Overview")
+    df = get_all_projects()
+    if not df.empty:
+        for _, row in df.iterrows():
+            st.markdown(f"**{row['name']}** - Carbon: {row['carbon_tonnes']} tCO₂ - Status: {row['status']}")
+            with st.expander("ℹ️ Explanation"):
+                st.write(row['explanation'] if row['explanation'] else "No explanation available")
+            
+            col1, col2, col3 = st.columns([1,1,1])
+            with col1:
+                if st.button("Delete", key=f"del_{row['id']}"):
+                    delete_project(row['id'])
+                    do_rerun()
+            with col2:
+                if st.button("Retire", key=f"ret_{row['id']}"):
+                    update_status(row['id'], "Retired")
+                    do_rerun()
+            with col3:
+                if st.button("Issue", key=f"iss_{row['id']}"):
+                    update_status(row['id'], "Issued")
+                    do_rerun()
     else:
-        st.info("No projects to display for the selected filters.")
-        
-# -----------------------------
+        st.info("No projects yet!")
+
+# -------------------
 # PUBLIC DASHBOARD
-# -----------------------------
+# -------------------
+
 def public_dashboard():
+    """Public view of all projects."""
     st.title("Public Registry")
-    
-    df_all = get_all_projects()
-    types = ["All"] + sorted(df_all['Type'].dropna().unique().tolist())
-    regions = ["All"] + sorted(df_all['Region'].dropna().unique().tolist())
-    statuses = ["All"] + ["Issued","Retired"]
-    
-    st.subheader("Filter Projects")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        type_filter = st.selectbox("Filter by Type", types)
-    with col2:
-        region_filter = st.selectbox("Filter by Region", regions)
-    with col3:
-        status_filter = st.selectbox("Filter by Status", statuses)
-    
-    df_filtered = filter_projects(df_all, type_filter, region_filter, status_filter)
-    
-    st.write(f"Total projects: {len(df_filtered)}")
-    st.write(f"Total carbon (tonnes): {df_filtered['Carbon_tonnes'].sum()}")
-    st.write(f"Total credits: {df_filtered['Credits'].sum()}")
-
-    if not df_filtered.empty:
-        for _, row in df_filtered.iterrows():
-            with st.expander(f"{row['Name']} ({row['Type']}, {row['Region']}) - Status: {row['Status']}"):
-                st.write(f"**Area (ha):** {row['Area_ha']}")
-                st.write(f"**Carbon Stored (t):** {row['Carbon_tonnes']}")
-                st.write(f"**Credits:** {row['Credits']}")
-                st.write(f"**Created At:** {row['Created_at']}")
-                st.write(f"**Explanation:** {row['Explanation'] if row['Explanation'] else 'No explanation available'}")
+    df = get_all_projects()
+    if not df.empty:
+        st.dataframe(df[['name','type','region','area_ha','carbon_tonnes','credits','status','created_at']])
+        for _, row in df.iterrows():
+            with st.expander(f"{row['name']} - ℹ️ Explanation"):
+                st.write(row['explanation'] if row['explanation'] else "No explanation available")
     else:
-        st.info("No projects to display for the selected filters.")
+        st.info("No projects available.")
 
-# -----------------------------
+# -------------------
 # MAIN APP
-# -----------------------------
+# -------------------
+
 def main():
     st.sidebar.title("Carbon Registry")
     mode = st.sidebar.selectbox("Select Mode", ["Public", "Admin"])
-    
     if mode == "Admin":
         password = st.sidebar.text_input("Enter Admin Password", type="password")
         if password == "admin123":
@@ -334,6 +267,10 @@ def main():
             st.sidebar.error("Wrong password!")
     else:
         public_dashboard()
+
+# -------------------
+# RUN APP
+# -------------------
 
 if __name__ == "__main__":
     main()
