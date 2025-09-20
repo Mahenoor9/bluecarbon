@@ -8,9 +8,6 @@ from datetime import datetime
 import traceback
 from typing import Tuple, List, Dict
 
-# ----------------------------------------
-# Configuration: direct DB credentials (no secrets.toml required)
-# ----------------------------------------
 DB_CONFIG = {
     "host": "db.hrrmqkjxxyumemtowloy.supabase.co",
     "port": 5432,
@@ -19,15 +16,12 @@ DB_CONFIG = {
     "password": "mahenoor123"
 }
 
-# ----------------------------------------
-# Database connection helpers
-# ----------------------------------------
 _conn = None
 _cursor = None
 
 def get_db_connection():
     global _conn, _cursor
-    if _conn is not None and _cursor is not None:
+    if _conn and _cursor:
         return _conn, _cursor
     try:
         _conn = psycopg2.connect(
@@ -56,32 +50,15 @@ def close_db_connection():
             _conn.close()
     except Exception:
         pass
-    _conn = None
-    _cursor = None
+    _conn, _cursor = None, None
 
-try:
-    conn, cur = get_db_connection()
-except Exception:
-    conn, cur = None, None
-
-# ----------------------------------------
-# Function to force Streamlit app rerun
-# ----------------------------------------
 def do_rerun():
-    """
-    Forces Streamlit to rerun to reflect updated DB state.
-    Compatible with different Streamlit versions.
-    """
     if hasattr(st, "rerun"):
         st.rerun()
     elif hasattr(st, "experimental_rerun"):
         st.experimental_rerun()
     else:
         st.experimental_set_query_params(_=datetime.now().timestamp())
-
-# ----------------------------------------
-# Ensure projects table exists (run once)
-# ----------------------------------------
 
 def ensure_table_exists():
     sql = """
@@ -108,10 +85,6 @@ def ensure_table_exists():
         raise
 
 ensure_table_exists()
-
-# ----------------------------------------
-# Utility functions: DB CRUD operations
-# ----------------------------------------
 
 def calculate_credits(area: float, carbon: float) -> float:
     try:
@@ -193,10 +166,6 @@ def db_update_project(proj_id: int, updates: Dict) -> None:
         st.error(f"Error updating project: {e}")
         traceback.print_exc()
 
-# ----------------------------------------
-# CSV helpers
-# ----------------------------------------
-
 def make_csv_template() -> bytes:
     template = pd.DataFrame({
         "name": ["Project A"],
@@ -246,10 +215,6 @@ def validate_csv_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     clean_df = pd.DataFrame(cleaned)
     return clean_df, errors
 
-# ----------------------------------------
-# UI helpers (status badge and timestamp)
-# ----------------------------------------
-
 def status_badge(status: str) -> str:
     s = str(status or "").lower()
     color = "#6c757d"
@@ -269,10 +234,6 @@ def pretty_timestamp(ts):
     except Exception:
         return str(ts)
 
-# ----------------------------------------
-# Admin dashboard UI
-# ----------------------------------------
-
 def admin_dashboard():
     st.title("Admin Dashboard — Cloud Registry")
     st.markdown("Use this dashboard to add projects (manually or via CSV), manage them, and inspect stats.")
@@ -281,7 +242,7 @@ def admin_dashboard():
     total_projects = len(df_all)
     total_carbon = round(float(df_all['carbon_tonnes'].sum()) if not df_all.empty else 0.0, 4)
     total_credits = round(float(df_all['credits'].sum()) if not df_all.empty else 0.0, 4)
-    col1, col2, col3, col4 = st.columns([2,2,2,2])
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
     with col1:
         st.metric("Total projects", total_projects)
     with col2:
@@ -291,7 +252,7 @@ def admin_dashboard():
     with col4:
         st.button("Refresh", on_click=do_rerun)
     st.markdown("---")
-    left, right = st.columns([2,3])
+    left, right = st.columns([2, 3])
     with left:
         st.header("Manual Entry")
         name = st.text_input("Project name", key="manual_name")
@@ -413,8 +374,14 @@ def admin_dashboard():
             st.write(f"Created: {pretty_timestamp(created_at)} | Updated: {pretty_timestamp(updated_at)}")
         with c2:
             st.markdown(status_badge(row['status']), unsafe_allow_html=True)
-            new_status = st.selectbox(f"Change status (ID {row['id']})", ["No change", "Draft", "Issued", "Retired"], index=0, key=f"status_{row['id']}")
-            if new_status != "No change":
+            status_options = ["Draft", "Issued", "Retired"]
+            current_status = row['status']
+            default_index = status_options.index(current_status) if current_status in status_options else 0
+
+            new_status = st.selectbox(f"Change status (ID {row['id']})",
+                                     status_options, index=default_index, key=f"status_{row['id']}")
+
+            if new_status != current_status:
                 if st.button(f"Apply status {new_status} (ID {row['id']})", key=f"apply_{row['id']}"):
                     db_update_status(row['id'], new_status)
                     st.success(f"Status updated to {new_status}")
@@ -443,10 +410,6 @@ def admin_dashboard():
                         })
                         st.success("Saved")
                         do_rerun()
-
-# ----------------------------------------
-# Public dashboard implementation
-# ----------------------------------------
 
 def public_dashboard():
     st.title("Public Registry — Cloud Projects")
@@ -497,10 +460,6 @@ def public_dashboard():
         st.dataframe(view_df)
     else:
         st.info("No projects match your filters.")
-
-# ----------------------------------------
-# Main program logic: entrypoint and routing
-# ----------------------------------------
 
 def main():
     st.set_page_config(page_title="Carbon Registry (Cloud)", layout="wide", initial_sidebar_state="auto")
