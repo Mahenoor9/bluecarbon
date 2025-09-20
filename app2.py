@@ -44,16 +44,12 @@ c = conn.cursor()
 REPLICATE_API_TOKEN = "r8_H7Kmosw7cwXKNjMAvqbDJCj5Hm97FGp1hrNsj"
 MODEL_VERSION_128K = "45ba1bd0a3cf3d5254becd00d937c4ba0c01b13fa1830818f483a76aa844205e"
 ENDPOINT = "https://api.replicate.com/v1/predictions"
-HEADERS = {
-    "Authorization": f"Token {REPLICATE_API_TOKEN}",
-    "Content-Type": "application/json"
-}
 LLM_CACHE = {}
 
 def predict_carbon_llm(area: float) -> tuple:
     """
-    Predict carbon using Phi-3 Mini 128k on Replicate API.
-    Returns: (carbon_estimate, explanation)
+    Calls Phi-3 Mini 128k model via Replicate API to predict carbon.
+    Uses caching to prevent repeated API calls.
     """
     if area in LLM_CACHE:
         return LLM_CACHE[area]
@@ -68,30 +64,32 @@ def predict_carbon_llm(area: float) -> tuple:
                 ]
             }
         }
+        HEADERS = {
+            "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
         response = requests.post(ENDPOINT, headers=HEADERS, json=data)
         response.raise_for_status()
         result = response.json()
         carbon_estimate = None
 
-        # Attempt to parse the model's output
         if 'output' in result and isinstance(result['output'], list) and len(result['output']) > 0:
             try:
                 carbon_estimate = float(result['output'][0])
-            except Exception as parse_err:
-                st.warning(f"LLM output parse error: {parse_err}")
-                carbon_estimate = area * 4.0  # Fallback default
+            except Exception:
+                carbon_estimate = area * 4.0  # fallback
 
         if carbon_estimate is None:
             carbon_estimate = area * 4.0
             explanation = f"Fallback: estimated carbon as {area} ha * 4.0 tCO₂/ha due to API output format"
         else:
-            explanation = f"Phi-3 Mini predicted carbon as {carbon_estimate:.2f} tCO₂ for {area} ha"
+            explanation = f"Phi-3 Mini predicted carbon as {carbon_estimate} tCO₂ for {area} ha"
 
         LLM_CACHE[area] = (carbon_estimate, explanation)
         return carbon_estimate, explanation
     except Exception as e:
         fallback_carbon = area * 4.0
-        explanation = f"Fallback due to API error: {e}, estimated carbon {fallback_carbon:.2f} tCO₂"
+        explanation = f"Fallback due to API error: {str(e)}, estimated carbon {fallback_carbon} tCO₂"
         LLM_CACHE[area] = (fallback_carbon, explanation)
         st.error(f"LLM prediction failed: {traceback.format_exc()}")
         return fallback_carbon, explanation
@@ -383,4 +381,3 @@ def main():
 # ------------------------#
 if __name__ == "__main__":
     main()
-
