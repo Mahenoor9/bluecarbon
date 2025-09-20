@@ -65,8 +65,24 @@ except Exception:
     conn, cur = None, None
 
 # ----------------------------------------
-# Ensure projects table exists
+# Function to force Streamlit app rerun
 # ----------------------------------------
+def do_rerun():
+    """
+    Forces Streamlit to rerun to reflect updated DB state.
+    Compatible with different Streamlit versions.
+    """
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+    else:
+        st.experimental_set_query_params(_=datetime.now().timestamp())
+
+# ----------------------------------------
+# Ensure projects table exists (run once)
+# ----------------------------------------
+
 def ensure_table_exists():
     sql = """
     CREATE TABLE IF NOT EXISTS projects (
@@ -94,8 +110,9 @@ def ensure_table_exists():
 ensure_table_exists()
 
 # ----------------------------------------
-# Utility functions: DB CRUD
+# Utility functions: DB CRUD operations
 # ----------------------------------------
+
 def calculate_credits(area: float, carbon: float) -> float:
     try:
         credits = 0.5 * area + 0.2 * carbon
@@ -159,15 +176,15 @@ def db_update_status(proj_id: int, status: str) -> None:
 
 def db_update_project(proj_id: int, updates: Dict) -> None:
     conn, cur = get_db_connection()
-    set_clauses = []
+    set_parts = []
     values = []
     for key, val in updates.items():
-        set_clauses.append(f"{key} = %s")
+        set_parts.append(f"{key} = %s")
         values.append(val)
-    if not set_clauses:
+    if not set_parts:
         return
     values.append(proj_id)
-    sql = f"UPDATE projects SET {', '.join(set_clauses)}, updated_at = NOW() WHERE id = %s"
+    sql = f"UPDATE projects SET {', '.join(set_parts)}, updated_at = NOW() WHERE id = %s"
     try:
         cur.execute(sql, tuple(values))
         conn.commit()
@@ -179,6 +196,7 @@ def db_update_project(proj_id: int, updates: Dict) -> None:
 # ----------------------------------------
 # CSV helpers
 # ----------------------------------------
+
 def make_csv_template() -> bytes:
     template = pd.DataFrame({
         "name": ["Project A"],
@@ -231,6 +249,7 @@ def validate_csv_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
 # ----------------------------------------
 # UI helpers (status badge and timestamp)
 # ----------------------------------------
+
 def status_badge(status: str) -> str:
     s = str(status or "").lower()
     color = "#6c757d"
@@ -253,6 +272,7 @@ def pretty_timestamp(ts):
 # ----------------------------------------
 # Admin dashboard UI
 # ----------------------------------------
+
 def admin_dashboard():
     st.title("Admin Dashboard — Cloud Registry")
     st.markdown("Use this dashboard to add projects (manually or via CSV), manage them, and inspect stats.")
@@ -393,8 +413,7 @@ def admin_dashboard():
             st.write(f"Created: {pretty_timestamp(created_at)} | Updated: {pretty_timestamp(updated_at)}")
         with c2:
             st.markdown(status_badge(row['status']), unsafe_allow_html=True)
-            new_status = st.selectbox(f"Change status (ID {row['id']})", ["No change", "Draft", "Issued", "Retired"], index=0,
-                                     key=f"status_{row['id']}")
+            new_status = st.selectbox(f"Change status (ID {row['id']})", ["No change", "Draft", "Issued", "Retired"], index=0, key=f"status_{row['id']}")
             if new_status != "No change":
                 if st.button(f"Apply status {new_status} (ID {row['id']})", key=f"apply_{row['id']}"):
                     db_update_status(row['id'], new_status)
@@ -480,7 +499,7 @@ def public_dashboard():
         st.info("No projects match your filters.")
 
 # ----------------------------------------
-# Main routing logic
+# Main program logic: entrypoint and routing
 # ----------------------------------------
 
 def main():
