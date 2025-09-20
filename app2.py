@@ -417,7 +417,7 @@ def public_dashboard():
     st.markdown("---")
 
     st.sidebar.header("Public filters")
-    status_filter = st.sidebar.multiselect("Status", ["Draft", "Issued", "Retired"], default=["Issued"])
+    status_filter = st.sidebar.multiselect("Status", ["Draft", "Issued", "Retired"], default=["Draft","Issued","Retired"])
     type_filter = st.sidebar.text_input("Type contains (public)")
     region_filter = st.sidebar.text_input("Region contains (public)")
     name_search = st.sidebar.text_input("Search name contains (public)")
@@ -513,3 +513,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
