@@ -23,41 +23,19 @@ import traceback
 from typing import Tuple, List, Dict
 
 # ----------------------------------------
-# Configuration: read DB credentials
+# Configuration: direct DB credentials (no secrets.toml required)
 # ----------------------------------------
-# Priority: Streamlit secrets -> environment variables -> inline defaults
-def load_db_config():
-    """
-    Load DB configuration from st.secrets or environment variables.
-    If none found, fallback to placeholder defaults (edit before production).
-    """
-    # Prefer Streamlit secrets if present
-    try:
-        secrets = st.secrets
-    except Exception:
-        secrets = {}
-
-    host = secrets.get("DB_HOST") or os.environ.get("DB_HOST") or "db.hrrmqkjxxyumemtowloy.supabase.co"
-    port = int(secrets.get("DB_PORT") or os.environ.get("DB_PORT") or 5432)
-    database = secrets.get("DB_NAME") or os.environ.get("DB_NAME") or "postgres"
-    user = secrets.get("DB_USER") or os.environ.get("DB_USER") or "postgres"
-    password = secrets.get("DB_PASSWORD") or os.environ.get("DB_PASSWORD") or "mahenoor123"
-
-    return {
-        "host": host,
-        "port": port,
-        "database": database,
-        "user": user,
-        "password": password
-    }
-
-DB_CONFIG = load_db_config()
+DB_CONFIG = {
+    "host": "db.hrrmqkjxxyumemtowloy.supabase.co",
+    "port": 5432,
+    "database": "postgres",
+    "user": "postgres",
+    "password": "mahenoor123"
+}
 
 # ----------------------------------------
 # Database connection helpers
 # ----------------------------------------
-# We'll hold a single persistent connection for the app lifecycle.
-# Using RealDictCursor so fetch results are dict-like (column names available).
 _conn = None
 _cursor = None
 
@@ -81,7 +59,6 @@ def get_db_connection():
             _cursor = _conn.cursor()
             print("[DB] Connected to Postgres")
         except Exception as e:
-            # Show error in Streamlit UI if running inside app
             st.error(f"Failed to connect to DB: {e}")
             traceback.print_exc()
             raise
@@ -102,7 +79,6 @@ def close_db_connection():
     _conn = None
     _cursor = None
 
-# Initialize DB connection at import/run
 try:
     conn, cur = get_db_connection()
 except Exception:
@@ -265,7 +241,6 @@ def validate_csv_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
             region = str(row.get("region", "")).strip()
             area = float(row.get("area_ha", 0) or 0)
             carbon = row.get("carbon_tonnes", 0)
-            # some CSVs may have empty carbon column -> treat as 0
             carbon = float(carbon or 0)
             status = row.get("status", "Draft") or "Draft"
             if not name or not type_ or not region:
@@ -293,11 +268,10 @@ def validate_csv_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
 def status_badge(status: str) -> str:
     """
     Return HTML snippet for a colored status badge for small UI polish.
-    Note: Streamlit supports unsafe_allow_html for small spans.
     """
     s = str(status or "").lower()
     color = "#6c757d"  # gray
-    if s == "issued" or s == "issued":
+    if s == "issued":
         color = "#16a34a"  # green
     elif s == "retired":
         color = "#dc2626"  # red
@@ -324,14 +298,11 @@ def admin_dashboard():
     st.title("Admin Dashboard — Cloud Registry")
     st.markdown("Use this dashboard to add projects (manually or via CSV), manage them, and inspect stats.")
     st.markdown("---")
-
-    # Top row: stats
     df_all = pd.DataFrame(db_get_projects())
     total_projects = len(df_all)
     total_carbon = round(float(df_all['carbon_tonnes'].sum()) if not df_all.empty else 0.0, 4)
     total_credits = round(float(df_all['credits'].sum()) if not df_all.empty else 0.0, 4)
-
-    col1, col2, col3, col4 = st.columns([2,2,2,2])
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
     with col1:
         st.metric("Total projects", total_projects)
     with col2:
@@ -340,12 +311,8 @@ def admin_dashboard():
         st.metric("Total credits", total_credits)
     with col4:
         st.button("Refresh", on_click=lambda: do_rerun())
-
     st.markdown("---")
-
-    # Layout: left = input, right = CSV upload/preview
-    left, right = st.columns([2,3])
-
+    left, right = st.columns([2, 3])
     with left:
         st.header("Manual Entry")
         name = st.text_input("Project name", key="manual_name")
@@ -355,7 +322,6 @@ def admin_dashboard():
         carbon = st.number_input("Carbon stored (tonnes) — optional", min_value=0.0, format="%.2f", key="manual_carbon")
         status_select = st.selectbox("Initial status", ["Draft", "Issued", "Retired"])
         st.markdown("If carbon is left blank or 0, it will be stored as 0. No AI/LLM is used in this version.")
-
         if st.button("Add project (manual)"):
             if not name or not type_ or not region:
                 st.error("Name, type, and region are required.")
@@ -365,18 +331,15 @@ def admin_dashboard():
                 try:
                     proj_id = db_add_project(name=name, type_=type_, region=region, area=area, carbon=carbon or 0, status=status_select)
                     st.success(f"Project added (ID {proj_id})")
-                    # clear fields by rerunning
                     do_rerun()
                 except Exception as e:
                     st.error(f"Failed to add project: {e}")
                     traceback.print_exc()
-
     with right:
         st.header("Bulk CSV Upload")
         st.markdown("Upload CSV files containing columns: `name,type,region,area_ha,carbon_tonnes (optional),status (optional)`")
         template_bytes = make_csv_template()
         st.download_button("Download CSV template", template_bytes, "projects_template.csv", "text/csv")
-
         uploaded_files = st.file_uploader("Upload CSV files (you can upload multiple)", accept_multiple_files=True, type=["csv"])
         if uploaded_files:
             preview_frames = []
@@ -392,18 +355,15 @@ def admin_dashboard():
                     preview_frames.append((uploaded.name, clean_df))
                 except Exception as e:
                     all_errors.append(f"{uploaded.name}: could not read CSV ({e})")
-
             if all_errors:
                 st.warning("Validation issues detected. See details below.")
                 for e in all_errors:
                     st.write("- " + e)
-
             if preview_frames:
                 st.info("Preview valid rows and click 'Confirm & Import' to insert into the cloud DB.")
                 for fname, cdf in preview_frames:
                     st.subheader(f"Valid rows from {fname}")
                     st.dataframe(cdf)
-
                 if st.button("Confirm & Import all valid rows"):
                     imported = 0
                     for _, cdf in preview_frames:
@@ -421,14 +381,9 @@ def admin_dashboard():
                                 st.error(f"Failed to import row: {e}")
                     st.success(f"Imported {imported} rows.")
                     do_rerun()
-
     st.markdown("---")
-
-    # Controls: filters, search, pagination for admin table
     st.header("Manage Projects")
     st.markdown("Filter, search, and perform bulk actions on existing projects.")
-
-    # Filters
     filter_cols = st.columns(4)
     with filter_cols[0]:
         status_filter = st.multiselect("Status", options=["Draft", "Issued", "Retired"], default=["Draft", "Issued", "Retired"])
@@ -438,18 +393,12 @@ def admin_dashboard():
         region_filter = st.text_input("Region contains")
     with filter_cols[3]:
         name_search = st.text_input("Search name contains")
-
-    # Pagination controls
     per_page = st.selectbox("Rows per page", [10, 20, 50, 100], index=1)
     page_num = st.number_input("Page number (1-indexed)", min_value=1, value=1, step=1)
-
-    # Apply filters & fetch
-    df = pd.DataFrame(db_get_projects())  # full set (we'll paginate locally)
+    df = pd.DataFrame(db_get_projects())
     if df.empty:
         st.info("No projects in the registry yet.")
         return
-
-    # Apply text filters
     if status_filter:
         df = df[df["status"].isin(status_filter)]
     if type_filter:
@@ -458,8 +407,6 @@ def admin_dashboard():
         df = df[df["region"].str.contains(region_filter, case=False, na=False)]
     if name_search:
         df = df[df["name"].str.contains(name_search, case=False, na=False)]
-
-    # Show aggregate stats for filtered subset
     st.markdown("#### Filtered summary")
     col_a, col_b, col_c = st.columns(3)
     with col_a:
@@ -468,8 +415,6 @@ def admin_dashboard():
         st.write(f"Carbon (filtered): {round(df['carbon_tonnes'].sum(),4)} tCO₂")
     with col_c:
         st.write(f"Credits (filtered): {round(df['credits'].sum(),4)}")
-
-    # Paginate
     total_rows = len(df)
     total_pages = max(1, math.ceil(total_rows / per_page))
     if page_num > total_pages:
@@ -477,22 +422,18 @@ def admin_dashboard():
     start_idx = (page_num - 1) * per_page
     end_idx = start_idx + per_page
     df_page = df.iloc[start_idx:end_idx]
-
     st.markdown(f"Showing page {page_num} of {total_pages}")
-    # Admin table with action buttons per row
     for idx, row in df_page.iterrows():
         st.markdown("----")
-        # Row header with basic fields
-        c1, c2, c3 = st.columns([4,2,2])
+        c1, c2, c3 = st.columns([4, 2, 2])
         with c1:
             st.markdown(f"**{row['name']}** — {row['type']} — {row['region']}")
             st.write(f"Area: {row['area_ha']} ha | Carbon: {row['carbon_tonnes']} tCO₂ | Credits: {row['credits']}")
             st.write(f"Created: {pretty_timestamp(row['created_at'])} | Updated: {pretty_timestamp(row['updated_at'])}")
         with c2:
-            # Status badge and ability to change
             st.markdown(status_badge(row['status']), unsafe_allow_html=True)
-            # Inline status change
-            new_status = st.selectbox(f"Change status (ID {row['id']})", ["No change", "Draft", "Issued", "Retired"], index=0, key=f"status_{row['id']}")
+            new_status = st.selectbox(f"Change status (ID {row['id']})", ["No change", "Draft", "Issued", "Retired"], index=0,
+                                     key=f"status_{row['id']}")
             if new_status != "No change":
                 if st.button(f"Apply status {new_status} (ID {row['id']})", key=f"apply_{row['id']}"):
                     db_update_status(row['id'], new_status)
@@ -503,9 +444,7 @@ def admin_dashboard():
                 db_delete_project(row['id'])
                 st.success("Deleted")
                 do_rerun()
-            # Edit link / inline edit form
             if st.button("Edit", key=f"edit_{row['id']}"):
-                # open a small editor modal using expander
                 with st.expander(f"Edit project ID {row['id']}", expanded=True):
                     edit_name = st.text_input("Name", value=row['name'], key=f"ename_{row['id']}")
                     edit_type = st.text_input("Type", value=row['type'], key=f"etype_{row['id']}")
@@ -513,7 +452,6 @@ def admin_dashboard():
                     edit_area = st.number_input("Area (ha)", value=float(row['area_ha'] or 0.0), key=f"earea_{row['id']}")
                     edit_carbon = st.number_input("Carbon (t)", value=float(row['carbon_tonnes'] or 0.0), key=f"ecarbon_{row['id']}")
                     if st.button("Save changes", key=f"save_{row['id']}"):
-                        # recalc credits
                         new_credits = calculate_credits(edit_area, edit_carbon)
                         db_update_project(row['id'], {
                             "name": edit_name,
@@ -526,12 +464,6 @@ def admin_dashboard():
                         st.success("Saved")
                         do_rerun()
 
-    # Bulk export of filtered results
-    st.markdown("---")
-    if not df.empty:
-        csv_data = df.to_csv(index=False).encode("utf-8")
-        st.download_button("Export filtered projects (CSV)", csv_data, "projects_export.csv", "text/csv")
-
 # ----------------------------------------
 # Public dashboard implementation
 # ----------------------------------------
@@ -539,22 +471,16 @@ def public_dashboard():
     st.title("Public Registry — Cloud Projects")
     st.markdown("Public table of projects stored in the cloud. Use filters on the left to refine view.")
     st.markdown("---")
-
-    # Sidebar filters (public)
     st.sidebar.header("Public filters")
     status_filter = st.sidebar.multiselect("Status", ["Draft", "Issued", "Retired"], default=["Issued"])
     type_filter = st.sidebar.text_input("Type contains (public)")
     region_filter = st.sidebar.text_input("Region contains (public)")
     name_search = st.sidebar.text_input("Search name contains (public)")
-
-    # Fetch projects
     rows = db_get_projects()
     if not rows:
         st.info("No projects available.")
         return
     df = pd.DataFrame(rows)
-
-    # Apply filters
     if status_filter:
         df = df[df["status"].isin(status_filter)]
     if type_filter:
@@ -563,15 +489,11 @@ def public_dashboard():
         df = df[df["region"].str.contains(region_filter, case=False, na=False)]
     if name_search:
         df = df[df["name"].str.contains(name_search, case=False, na=False)]
-
-    # Display summary
     total_projects = len(df)
-    total_carbon = round(df['carbon_tonnes'].sum(),4) if not df.empty else 0.0
-    total_credits = round(df['credits'].sum(),4) if not df.empty else 0.0
+    total_carbon = round(df['carbon_tonnes'].sum(), 4) if not df.empty else 0.0
+    total_credits = round(df['credits'].sum(), 4) if not df.empty else 0.0
     st.markdown(f"**Total projects:** {total_projects} — **Total carbon:** {total_carbon} tCO₂ — **Total credits:** {total_credits}")
     st.markdown("---")
-
-    # Public table: tidy columns
     if not df.empty:
         view_df = df[["id", "name", "type", "region", "area_ha", "carbon_tonnes", "credits", "status", "created_at"]].copy()
         view_df.rename(columns={
@@ -585,7 +507,6 @@ def public_dashboard():
             "status": "Status",
             "created_at": "Created_at"
         }, inplace=True)
-        # Format created_at
         view_df["Created_at"] = view_df["Created_at"].apply(pretty_timestamp)
         st.dataframe(view_df)
     else:
@@ -598,18 +519,14 @@ def main():
     st.set_page_config(page_title="Carbon Registry (Cloud)", layout="wide", initial_sidebar_state="auto")
     st.sidebar.title("Carbon Registry")
     st.sidebar.markdown("Select view and actions")
-
     page = st.sidebar.radio("Navigate", ["Public", "Admin", "About"])
-
     if page == "Admin":
-        # simple password gate; for production, replace with proper auth
         st.sidebar.markdown("---")
         password = st.sidebar.text_input("Admin password", type="password")
-        if password == "" and "password" not in st.session_state:
+        if password.strip() == "" and "password" not in st.session_state:
             st.sidebar.info("Enter admin password to continue.")
             public_dashboard()
             return
-        # For simplicity, default admin password is 'admin123' (change in production)
         if password == "admin123" or st.session_state.get("is_admin"):
             st.session_state["is_admin"] = True
             admin_dashboard()
@@ -644,8 +561,5 @@ def main():
             close_db_connection()
             st.success("DB connection closed. The app will reconnect on next DB use.")
 
-# ----------------------------------------
-# Run the app
-# ----------------------------------------
 if __name__ == "__main__":
     main()
