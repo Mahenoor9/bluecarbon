@@ -78,20 +78,13 @@ def db_add_project(name: str, type_: str, region: str, area: float, carbon: floa
 
 
 def db_get_projects(limit: int = None, offset: int = 0) -> List[Dict]:
-    """
-    Fetch projects from Supabase.
-    Optional limit and offset for pagination.
-    Returns list of project dictionaries or empty list on failure.
-    """
     query = supabase.table("projects").select("*").order("id", desc=True)
     if limit:
         query = query.limit(limit).offset(offset)
     try:
         response = query.execute()
-        if response.error:
-            st.error(f"Error retrieving projects: {response.error}")
-            return []
-        return response.data
+        st.write("Response from Supabase:", response)  # This outputs inside your app
+        return getattr(response, "data", [])  # Safely get data attribute
     except Exception as e:
         st.error(f"Exception in retrieving projects: {e}")
         return []
@@ -516,6 +509,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
