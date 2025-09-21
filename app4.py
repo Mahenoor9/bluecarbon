@@ -12,8 +12,8 @@ def init_connection():
     """
     Initialize the Supabase client using credentials from Streamlit secrets.
     """
-    url = st.secrets["https://hrrmqkjxxyumemtowloy.supabase.co"]
-    key = st.secrets["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhycm1xa2p4eHl1bWVtdG93bG95Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgyODg3MjEsImV4cCI6MjA3Mzg2NDcyMX0.8GedKthBAc3SA4juuhOz0rHShBX4EtI6lF3SF7UxPAA"]
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
     client = create_client(url, key)
     return client
 
@@ -515,4 +515,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
