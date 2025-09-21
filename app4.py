@@ -88,13 +88,14 @@ def db_get_projects(limit: int = None, offset: int = 0) -> List[Dict]:
         query = query.limit(limit).offset(offset)
     try:
         response = query.execute()
-        if response.status_code != 200:
-            st.error(f"Error retrieving projects: {response.error_message}")
+        if response.error:
+            st.error(f"Error retrieving projects: {response.error}")
             return []
         return response.data
     except Exception as e:
         st.error(f"Exception in retrieving projects: {e}")
         return []
+
 
 
 def db_delete_project(proj_id: int) -> None:
@@ -515,5 +516,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
