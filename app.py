@@ -6,17 +6,12 @@ from typing import Tuple, List, Dict
 from supabase import create_client, Client
 
 
-# Initialize connection to Supabase using Streamlit secrets.
 @st.cache_resource
 def init_connection():
-    """
-    Initialize the Supabase client using credentials from Streamlit secrets.
-    """
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
     client = create_client(url, key)
     return client
-
 
 supabase = init_connection()
 
@@ -34,11 +29,6 @@ def do_rerun():
 
 
 def calculate_credits(area: float, carbon: float) -> float:
-    """
-    Calculate carbon credits based on area and carbon stored.
-    Formula: credits = 0.5 * area + 0.2 * carbon
-    Returns credits rounded to 4 decimal places.
-    """
     try:
         credits = 0.5 * area + 0.2 * carbon
         return round(credits, 4)
@@ -78,8 +68,6 @@ def db_get_projects(limit: int = None, offset: int = 0) -> List[Dict]:
         query = query.limit(limit).offset(offset)
     try:
         response = query.execute()
-        # Debug line - comment out after use
-        # st.write("Response from Supabase:", response)
         return getattr(response, "data", [])
     except Exception as e:
         st.error(f"Exception in retrieving projects: {e}")
@@ -464,13 +452,13 @@ def verifier_dashboard():
             if st.button(f"Verify (ID {row['id']})", key=f"verify_{row['id']}"):
                 db_update_verified_status(row['id'], 'Verified')
                 st.success("Marked as Verified")
-                st.experimental_rerun()
+                do_rerun()
 
         with col2:
             if st.button(f"Unverify (ID {row['id']})", key=f"unverify_{row['id']}"):
                 db_update_verified_status(row['id'], 'Unverified')
                 st.success("Marked as Unverified")
-                st.experimental_rerun()
+                do_rerun()
 
 
 def main():
@@ -518,11 +506,9 @@ def main():
         """)
         st.markdown("### Current DB connection info (for debugging)")
         st.write({
-            # Do not display secrets publicly
             "host": "hidden for security"
         })
 
 
 if __name__ == "__main__":
     main()
-
