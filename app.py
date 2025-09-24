@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Tuple, List, Dict
 from supabase import create_client, Client
 
-
 @st.cache_resource
 def init_connection():
     url = st.secrets["SUPABASE_URL"]
@@ -14,7 +13,6 @@ def init_connection():
     return client
 
 supabase = init_connection()
-
 
 def do_rerun():
     """
@@ -27,7 +25,6 @@ def do_rerun():
     else:
         st.experimental_set_query_params(_=datetime.now().timestamp())
 
-
 def calculate_credits(area: float, carbon: float) -> float:
     try:
         credits = 0.5 * area + 0.2 * carbon
@@ -35,7 +32,6 @@ def calculate_credits(area: float, carbon: float) -> float:
     except Exception as e:
         st.error(f"Error calculating credits: {e}")
         return 0.0
-
 
 def db_add_project(name: str, type_: str, region: str, area: float, carbon: float, status: str = "Draft") -> int:
     credits = calculate_credits(area or 0, carbon or 0)
@@ -61,7 +57,6 @@ def db_add_project(name: str, type_: str, region: str, area: float, carbon: floa
         st.error(f"Exception in adding project: {e}")
         return -1
 
-
 def db_get_projects(limit: int = None, offset: int = 0) -> List[Dict]:
     query = supabase.table("projects").select("*").order("id", desc=True)
     if limit:
@@ -73,7 +68,6 @@ def db_get_projects(limit: int = None, offset: int = 0) -> List[Dict]:
         st.error(f"Exception in retrieving projects: {e}")
         return []
 
-
 def db_delete_project(proj_id: int) -> None:
     try:
         response = supabase.table("projects").delete().eq("id", proj_id).execute()
@@ -81,16 +75,6 @@ def db_delete_project(proj_id: int) -> None:
             st.error(f"Error deleting project: {response.error_message}")
     except Exception as e:
         st.error(f"Exception in deleting project: {e}")
-
-
-def db_update_status(proj_id: int, status: str) -> None:
-    try:
-        response = supabase.table("projects").update({"status": status, "updated_at": "now()"}).eq("id", proj_id).execute()
-        if hasattr(response, "status_code") and response.status_code != 200:
-            st.error(f"Error updating status: {response.error_message}")
-    except Exception as e:
-        st.error(f"Exception in updating status: {e}")
-
 
 def db_update_project(proj_id: int, updates: Dict) -> None:
     try:
@@ -100,7 +84,6 @@ def db_update_project(proj_id: int, updates: Dict) -> None:
             st.error(f"Error updating project: {response.error_message}")
     except Exception as e:
         st.error(f"Exception in updating project: {e}")
-
 
 def db_update_verified_status(proj_id: int, status: str) -> None:
     try:
@@ -112,7 +95,6 @@ def db_update_verified_status(proj_id: int, status: str) -> None:
             st.error(f"Error updating verified status: {response.error}")
     except Exception as e:
         st.error(f"Exception in updating verified status: {e}")
-
 
 def make_csv_template() -> bytes:
     template = pd.DataFrame({
@@ -126,7 +108,6 @@ def make_csv_template() -> bytes:
     buf = io.BytesIO()
     template.to_csv(buf, index=False)
     return buf.getvalue()
-
 
 def validate_csv_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     errors = []
@@ -164,7 +145,6 @@ def validate_csv_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     clean_df = pd.DataFrame(cleaned)
     return clean_df, errors
 
-
 def status_badge(status: str) -> str:
     s = str(status or "").lower()
     color = "#6c757d"
@@ -176,7 +156,6 @@ def status_badge(status: str) -> str:
         color = "#f59e0b"
     return f"<span style='background:{color};color:white;padding:4px 8px;border-radius:6px;font-size:12px'>{status}</span>"
 
-
 def pretty_timestamp(ts):
     try:
         if ts is None:
@@ -185,10 +164,9 @@ def pretty_timestamp(ts):
     except Exception:
         return str(ts)
 
-
 def admin_dashboard():
-    st.title("Admin Dashboard — Cloud Registry")
-    st.markdown("Use this dashboard to add projects (manually or via CSV), manage them, and inspect stats.")
+    st.title("Project Owner Dashboard — Cloud Registry")
+    st.markdown("Use this dashboard to add projects (manually or via CSV), and manage/deleting them.")
     st.markdown("---")
 
     df_all = pd.DataFrame(db_get_projects())
@@ -279,7 +257,7 @@ def admin_dashboard():
 
     st.markdown("---")
     st.header("Manage Projects")
-    st.markdown("Filter, search, and perform bulk actions on existing projects.")
+    st.markdown("Filter, search, and perform bulk actions on your projects.")
     filter_cols = st.columns(4)
     with filter_cols[0]:
         status_filter = st.multiselect("Status", options=["Draft", "Issued", "Retired"], default=["Draft", "Issued", "Retired"])
@@ -327,7 +305,7 @@ def admin_dashboard():
     st.markdown(f"Showing page {page_num} of {total_pages}")
     for idx, row in df_page.iterrows():
         st.markdown("---")
-        c1, c2, c3 = st.columns([4, 2, 2])
+        c1, c2 = st.columns([6, 2])  # Change to 2 columns: details, actions
         with c1:
             created_at = row.get('created_at', None)
             updated_at = row.get('updated_at', None)
@@ -336,20 +314,6 @@ def admin_dashboard():
             st.write(f"Created: {pretty_timestamp(created_at)} | Updated: {pretty_timestamp(updated_at)}")
             st.write(f"Status: {row['status']} — Verified: {row.get('verified', 'Unverified')}")
         with c2:
-            st.markdown(status_badge(row['status']), unsafe_allow_html=True)
-            status_options = ["Draft", "Issued", "Retired"]
-            current_status = row['status']
-            default_index = status_options.index(current_status) if current_status in status_options else 0
-
-            new_status = st.selectbox(f"Change status (ID {row['id']})",
-                                     status_options, index=default_index, key=f"status_{row['id']}")
-
-            if new_status != current_status:
-                if st.button(f"Apply status {new_status} (ID {row['id']})", key=f"apply_{row['id']}"):
-                    db_update_status(row['id'], new_status)
-                    st.success(f"Status updated to {new_status}")
-                    do_rerun()
-        with c3:
             if st.button("Delete", key=f"del_{row['id']}"):
                 db_delete_project(row['id'])
                 st.success("Deleted")
@@ -373,7 +337,6 @@ def admin_dashboard():
                         })
                         st.success("Saved")
                         do_rerun()
-
 
 def public_dashboard():
     st.title("Public Registry — Cloud Projects")
@@ -428,7 +391,6 @@ def public_dashboard():
     else:
         st.info("No projects match your filters.")
 
-
 def verifier_dashboard():
     st.title("Verifier Dashboard — Carbon Registry")
     st.markdown("View projects and mark as Verified or Unverified.")
@@ -460,30 +422,28 @@ def verifier_dashboard():
                 st.success("Marked as Unverified")
                 do_rerun()
 
-
 def main():
     st.set_page_config(page_title="Carbon Registry (Cloud)", layout="wide", initial_sidebar_state="auto")
     st.sidebar.title("Carbon Registry")
     st.sidebar.markdown("Select view and actions")
-    page = st.sidebar.radio("Navigate", ["Public", "Verifier", "Admin", "About"])
+    page = st.sidebar.radio("Navigate", ["Public", "Verifier", "Project Owner", "About"])
 
-    if page == "Admin":
+    if page == "Project Owner":
         st.sidebar.markdown("---")
-        password = st.sidebar.text_input("Admin password", type="password")
+        password = st.sidebar.text_input("Owner password", type="password")
         if password.strip() == "" and "password" not in st.session_state:
-            st.sidebar.info("Enter admin password to continue.")
+            st.sidebar.info("Enter owner password to continue.")
             public_dashboard()
             return
 
-        if password == "admin123" or st.session_state.get("is_admin"):
-            st.session_state["is_admin"] = True
+        if password == "owner123" or st.session_state.get("is_owner"):
+            st.session_state["is_owner"] = True
             admin_dashboard()
         else:
             st.sidebar.error("Wrong password.")
             public_dashboard()
 
     elif page == "Verifier":
-        # No password authentication for verifier since blockchain handles verification externally
         verifier_dashboard()
 
     elif page == "Public":
@@ -495,20 +455,19 @@ def main():
         This app stores project data (area, carbon, credits, status) in a cloud PostgreSQL database (Supabase).
 
         Features:
-        - Admin: add projects (manual or CSV), manage status, edit, delete.
+        - Project Owner: add projects (manual or CSV), edit, delete.
         - Verifier: view projects, mark Verified/Unverified.
         - Public: view projects in tabular format with filters.
         - No LLMs or external AI calls in this version (cloud-only registry).
 
         Notes:
         - DB credentials are read from Streamlit secrets or environment variables for safety.
-        - Replace the admin password and secure the app before production.
+        - Replace the owner password and secure the app before production.
         """)
         st.markdown("### Current DB connection info (for debugging)")
         st.write({
             "host": "hidden for security"
         })
-
 
 if __name__ == "__main__":
     main()
