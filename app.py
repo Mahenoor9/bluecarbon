@@ -102,8 +102,7 @@ def make_csv_template() -> bytes:
         "type": ["Afforestation"],
         "region": ["India"],
         "area_ha": [100],
-        "carbon_tonnes": [400],
-        "status": ["Draft"]
+        "carbon_tonnes": [400]
     })
     buf = io.BytesIO()
     template.to_csv(buf, index=False)
@@ -125,7 +124,6 @@ def validate_csv_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
             region = str(row.get("region", "")).strip()
             area = float(row.get("area_ha", 0) or 0)
             carbon = float(row.get("carbon_tonnes", 0) or 0)
-            status = row.get("status", "Draft") or "Draft"
             if not name or not type_ or not region:
                 errors.append(f"Row {idx}: missing required text fields")
                 continue
@@ -137,8 +135,7 @@ def validate_csv_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
                 "type": type_,
                 "region": region,
                 "area": area,
-                "carbon": carbon,
-                "status": status
+                "carbon": carbon
             })
         except Exception as e:
             errors.append(f"Row {idx}: parsing error: {e}")
@@ -193,22 +190,21 @@ def admin_dashboard():
         region = st.text_input("Region", key="manual_region")
         area = st.number_input("Area (ha)", min_value=0.0, format="%.2f", key="manual_area")
         carbon = st.number_input("Carbon stored (tonnes) — optional", min_value=0.0, format="%.2f", key="manual_carbon")
-        status_select = st.selectbox("Initial status", ["Draft", "Issued", "Retired"])
-        st.markdown("If carbon is left blank or 0, it will be stored as 0. No AI/LLM is used in this version.")
+        st.markdown("If carbon is left blank or 0, it will be stored as 0. Project status is now managed on-chain; all new projects default to 'Draft' locally.")
         if st.button("Add project (manual)"):
             if not name or not type_ or not region:
                 st.error("Name, type, and region are required.")
             elif area <= 0:
                 st.error("Area must be > 0.")
             else:
-                proj_id = db_add_project(name=name, type_=type_, region=region, area=area, carbon=carbon or 0, status=status_select)
+                proj_id = db_add_project(name=name, type_=type_, region=region, area=area, carbon=carbon or 0, status="Draft")
                 if proj_id:
                     st.success(f"Project added (ID {proj_id})")
                     do_rerun()
 
     with right:
         st.header("Bulk CSV Upload")
-        st.markdown("Upload CSV files containing columns: `name,type,region,area_ha,carbon_tonnes (optional),status (optional)`")
+        st.markdown("Upload CSV files containing columns: `name,type,region,area_ha,carbon_tonnes (optional)`")
         template_bytes = make_csv_template()
         st.download_button("Download CSV template", template_bytes, "projects_template.csv", "text/csv")
         uploaded_files = st.file_uploader("Upload CSV files (you can upload multiple)", accept_multiple_files=True, type=["csv"])
@@ -247,8 +243,7 @@ def admin_dashboard():
                                 region_v = r["region"]
                                 area_v = float(r["area"])
                                 carbon_v = float(r["carbon"])
-                                status_v = r.get("status", "Draft") or "Draft"
-                                db_add_project(name=name, type_=type_v, region=region_v, area=area_v, carbon=carbon_v, status=status_v)
+                                db_add_project(name=name, type_=type_v, region=region_v, area=area_v, carbon=carbon_v, status="Draft")
                                 imported += 1
                             except Exception as e:
                                 st.error(f"Failed to import row: {e}")
@@ -305,7 +300,7 @@ def admin_dashboard():
     st.markdown(f"Showing page {page_num} of {total_pages}")
     for idx, row in df_page.iterrows():
         st.markdown("---")
-        c1, c2 = st.columns([6, 2])  # Change to 2 columns: details, actions
+        c1, c2 = st.columns([6, 2])
         with c1:
             created_at = row.get('created_at', None)
             updated_at = row.get('updated_at', None)
